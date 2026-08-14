@@ -112,6 +112,22 @@ export default defineConfig(({ command, mode }) => {
           }
         },
       },
+      {
+        // uni-app 4.76 的微信生产构建会生成缺少 CDN 域名的阴影图预加载地址，
+        // 开发者工具会把它误当成本地 /pages/... 路径并报 500。
+        name: 'fix-uni-preload-shadow-image-url',
+        enforce: 'post',
+        renderChunk(code) {
+          if (UNI_PLATFORM !== 'mp-weixin')
+            return null
+
+          const fixedCode = code.replace(
+            /(["'])\/[0-9a-f]+\/img\/shadow-grey\.png\1/g,
+            '$1://cdn.dcloud.net.cn/img/shadow-grey.png$1',
+          )
+          return fixedCode === code ? null : { code: fixedCode, map: null }
+        },
+      },
       UnoCSS(),
       AutoImport({
         imports: ['vue', 'uni-app'],

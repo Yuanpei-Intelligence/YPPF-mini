@@ -421,7 +421,7 @@ onMounted(() => {
           >
             <view v-if="pool.results.big_prize_results?.length" class="mb-4">
               <text class="mb-2 block text-center text-base font-bold" style="color: gold;">
-                <text class="i-carbon-crown mr-1" />
+                <text class="i-carbon-trophy mr-1" />
                 特别奖品获奖同学
               </text>
               <view
@@ -570,7 +570,7 @@ onMounted(() => {
 
             <!-- 全部奖品 -->
             <text class="mb-1.5 block text-center text-xs text-gray-600">
-              <text class="i-carbon-gifts mr-1" />
+              <text class="i-carbon-gift mr-1" />
               全部奖品
             </text>
             <scroll-view scroll-x class="w-full" enable-flex>
