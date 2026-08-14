@@ -8,7 +8,8 @@ onLaunch((options) => {
   // 尝试自动登录
   // #ifdef MP-WEIXIN
   const tokenStore = useTokenStore()
-  tokenStore.wxLogin()
+  if (!tokenStore.hasLogin)
+    void tokenStore.wxLogin().catch(() => undefined)
   // #endif
 })
 onShow((options) => {

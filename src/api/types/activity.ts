@@ -4,6 +4,11 @@
 export type ActivityStatus = '审核中' | '已撤销' | '未过审' | '已取消' | '报名中' | '待发布' | '等待中' | '进行中' | '已结束'
 
 /**
+ * 当前用户的活动参与状态
+ */
+export type ActivityParticipationStatus = '申请中' | '活动申请失败' | '已报名' | '已参与' | '未签到' | '放弃'
+
+/**
  * 活动类别枚举
  */
 export type ActivityCategory = 0 | 1 // 0: 普通活动, 1: 课程活动
@@ -34,6 +39,22 @@ export interface IActivitySummary {
   category_display: string
   has_tag: boolean
   popular_level: number // 0: normal, 1: popular, 2: full
+}
+
+/**
+ * 活动详情信息
+ */
+export interface IActivityDetail extends IActivitySummary {
+  participation_status: ActivityParticipationStatus | null
+}
+
+/**
+ * 报名或取消报名后的结果
+ */
+export interface IActivityActionResult {
+  message: string
+  participation_status: ActivityParticipationStatus
+  current_participants: number
 }
 
 /**

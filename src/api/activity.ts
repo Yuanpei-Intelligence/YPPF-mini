@@ -1,4 +1,4 @@
-import type { IActivityHomepage, IActivitySummary, ICheckInRes } from './types/activity'
+import type { IActivityActionResult, IActivityDetail, IActivityHomepage, ICheckInRes } from './types/activity'
 import { http } from '@/http/http'
 
 /**
@@ -20,8 +20,24 @@ export function getActivityOverview() {
  * @param id 活动ID
  * @returns 活动信息
  */
-export function getActivityInfo(id: number) {
-  return http.get<IActivitySummary>(`/api/v2/activity/${id}/`)
+export function getActivityInfo(id: number, hideErrorToast = false) {
+  return http.get<IActivityDetail>(`/api/v2/activity/${id}/`, undefined, undefined, { hideErrorToast })
+}
+
+/**
+ * 报名指定活动
+ * @param id 活动ID
+ */
+export function signUpActivity(id: number) {
+  return http.post<IActivityActionResult>(`/api/v2/activity/${id}/signup/`)
+}
+
+/**
+ * 取消指定活动的报名
+ * @param id 活动ID
+ */
+export function withdrawActivitySignup(id: number) {
+  return http.delete<IActivityActionResult>(`/api/v2/activity/${id}/signup/`)
 }
 
 /**
