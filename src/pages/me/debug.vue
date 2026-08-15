@@ -2,8 +2,8 @@
 import { storeToRefs } from 'pinia'
 import { useUserStore } from '@/store'
 import { useTokenStore } from '@/store/token'
-import { openWebview } from '@/utils'
 import { setGlobalError } from '@/utils/globalError'
+import { openWebview } from '@/utils/webview'
 
 const userStore = useUserStore()
 const tokenStore = useTokenStore()

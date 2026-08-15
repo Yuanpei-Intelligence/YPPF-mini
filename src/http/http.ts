@@ -184,10 +184,12 @@ export function http<T>(options: CustomRequestOptions) {
       },
       // 响应失败
       fail(err) {
-        uni.showToast({
-          icon: 'none',
-          title: '网络错误，换个网络试试',
-        })
+        if (!options.hideErrorToast) {
+          uni.showToast({
+            icon: 'none',
+            title: '网络错误，换个网络试试',
+          })
+        }
         reject(err)
       },
     } as UniApp.RequestOptions)

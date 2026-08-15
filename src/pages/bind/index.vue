@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import { getUserMe, wxBind } from '@/api/login'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
-import { openWebview } from '@/utils'
+import { openWebview } from '@/utils/webview'
 
 definePage({
   style: {

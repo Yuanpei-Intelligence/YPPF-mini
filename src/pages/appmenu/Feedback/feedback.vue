@@ -11,7 +11,7 @@ import {
   listPublicFeedback,
 } from '@/api/feedback'
 import { useUserStore } from '@/store/user'
-import { openWebview } from '@/utils'
+import { openWebview } from '@/utils/webview'
 
 definePage({
   style: {

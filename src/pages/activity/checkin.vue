@@ -1,7 +1,6 @@
 <script lang="ts" setup>
-import type { IActivitySummary } from '@/api/types/activity'
+import type { IActivityDetail } from '@/api/types/activity'
 import { checkInActivity, getActivityInfo } from '@/api/activity'
-import { openWebview } from '@/utils'
 
 definePage({
   style: {
@@ -11,8 +10,9 @@ definePage({
 })
 
 const activityId = ref<number>(-1)
-const activity = ref<IActivitySummary | null>(null)
+const activity = ref<IActivityDetail | null>(null)
 const loading = ref(true)
+const loadError = ref('')
 const checkIning = ref(false)
 const checkInSuccess = ref(false)
 
@@ -34,18 +34,17 @@ function formatDateTime(dateTimeStr: string) {
 }
 
 async function fetchActivityInfo() {
-  if (activityId.value === -1)
+  if (!Number.isInteger(activityId.value) || activityId.value <= 0)
     return
   loading.value = true
+  loadError.value = ''
   try {
-    activity.value = await getActivityInfo(activityId.value)
+    activity.value = await getActivityInfo(activityId.value, true)
+    checkInSuccess.value = activity.value.participation_status === '已参与'
   }
   catch (error) {
-    console.error(error)
-    uni.showToast({
-      title: '获取活动信息失败',
-      icon: 'error',
-    })
+    console.error('获取活动签到信息失败:', error)
+    loadError.value = '暂时无法获取活动信息，请检查网络后重试。'
   }
   finally {
     loading.value = false
@@ -53,7 +52,7 @@ async function fetchActivityInfo() {
 }
 
 async function handleCheckIn() {
-  if (activityId.value === -1) {
+  if (!Number.isInteger(activityId.value) || activityId.value <= 0) {
     uni.showToast({ title: '参数错误', icon: 'none' })
     return
   }
@@ -64,14 +63,14 @@ async function handleCheckIn() {
   try {
     const res = await checkInActivity(activityId.value)
     checkInSuccess.value = true
+    if (activity.value)
+      activity.value.participation_status = '已参与'
     uni.showToast({
       title: res.message || '签到成功',
       icon: 'success',
     })
-    // 展示详情
-    // TODO: 改成原生的
     setTimeout(() => {
-      void openWebview({ uri: `/viewActivity/${activityId.value}` })
+      uni.redirectTo({ url: `/pages/activity/detail?id=${activityId.value}` })
     }, 1000)
   }
   catch (error) {
@@ -99,9 +98,10 @@ onLoad((options) => {
       activityId.value = Number(options.id)
     }
   }
-  if (activityId.value === -1) {
-    uni.showToast({ title: '参数错误', icon: 'error' })
+  if (!Number.isInteger(activityId.value) || activityId.value <= 0) {
+    activityId.value = -1
     loading.value = false
+    loadError.value = '签到码无效，无法获取活动信息。'
     return
   }
   fetchActivityInfo()
@@ -123,8 +123,16 @@ onLoad((options) => {
       <uv-loading-icon mode="circle" />
     </view>
 
+    <!-- 参数错误或加载失败 -->
+    <view v-else-if="loadError" class="flex flex-col items-center justify-center px-8 py-20 text-center">
+      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
+      <button class="mt-4 rounded-lg bg-blue-500 px-6 py-2 text-white" @click="activityId === -1 ? goBack() : fetchActivityInfo()">
+        {{ activityId === -1 ? '返回' : '重试' }}
+      </button>
+    </view>
+
     <!-- 活动信息 -->
-    <view v-else-if="activity" class="px-4 pt-4">
+    <view v-else-if="activity" class="px-4 pt-4" :class="activity.need_checkin ? 'pb-24' : 'pb-6'">
       <view class="overflow-hidden rounded-xl bg-white shadow-sm">
         <view class="p-4">
           <view class="mb-2 flex items-center justify-between">
@@ -139,7 +147,7 @@ onLoad((options) => {
                 'bg-yellow-50 text-yellow-600': activity.status === '审核中',
               }"
             >
-              {{ activity.status_display || activity.status }}
+              {{ activity.status }}
             </view>
           </view>
 
@@ -166,7 +174,7 @@ onLoad((options) => {
     </view>
 
     <!-- 签到按钮 -->
-    <view v-if="activity && !loading" class="fixed bottom-0 left-0 right-0 bg-white px-4 py-4 pb-safe shadow-lg">
+    <view v-if="activity?.need_checkin && !loading" class="fixed bottom-0 left-0 right-0 bg-white px-4 pt-3 pb-safe shadow-lg">
       <button
         class="w-full rounded-lg py-3 text-base font-medium"
         :class="checkInSuccess ? 'bg-gray-300 text-gray-500' : (checkIning ? 'bg-gray-300 text-gray-500' : 'bg-blue-500 text-white')"
@@ -176,19 +184,11 @@ onLoad((options) => {
         {{ checkInSuccess ? '已签到' : (checkIning ? '签到中...' : '签到') }}
       </button>
     </view>
-
-    <!-- 底部占位 -->
-    <view v-if="activity && !loading" class="h-20" />
-
-    <!-- 参数错误或加载失败 -->
-    <view v-else class="flex flex-col items-center justify-center py-20">
-      <text class="text-gray-400">{{ activityId === -1 ? '参数错误，无法签到' : '获取活动信息失败' }}</text>
-      <button class="mt-4 rounded-lg bg-blue-500 px-6 py-2 text-white" @click="activityId === -1 ? goBack() : fetchActivityInfo()">
-        {{ activityId === -1 ? '返回' : '重试' }}
-      </button>
-    </view>
   </view>
 </template>
 
 <style lang="scss" scoped>
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
 </style>
