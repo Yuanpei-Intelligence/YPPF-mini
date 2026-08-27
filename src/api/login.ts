@@ -12,6 +12,8 @@ import type {
 } from './types/login'
 import { http } from '@/http/http'
 
+const manualErrorPresentation = { errorPresentation: 'manual' } as const
+
 /**
  * 登录表单
  */
@@ -55,10 +57,10 @@ export function login(loginForm: ILoginForm) {
  */
 export function wxLogin(code: string, username?: string) {
   if (username) {
-    return http.post<IWxLoginRes>('/api/v2/auth/wx/login/', { code, username })
+    return http.post<IWxLoginRes>('/api/v2/auth/wx/login/', { code, username }, undefined, undefined, manualErrorPresentation)
   }
   else {
-    return http.post<IWxLoginRes>('/api/v2/auth/wx/login/', { code })
+    return http.post<IWxLoginRes>('/api/v2/auth/wx/login/', { code }, undefined, undefined, manualErrorPresentation)
   }
 }
 
@@ -67,14 +69,14 @@ export function wxLogin(code: string, username?: string) {
  * @param bindForm 绑定表单
  */
 export function wxBind(bindForm: IWxBindForm) {
-  return http.post<IWxBindRes>('/api/v2/auth/wx/bind/', bindForm)
+  return http.post<IWxBindRes>('/api/v2/auth/wx/bind/', bindForm, undefined, undefined, manualErrorPresentation)
 }
 
 /**
  * 微信账号解除绑定
  */
 export function wxUnbind() {
-  return http.post<null>('/api/v2/auth/wx/unbind/')
+  return http.post<null>('/api/v2/auth/wx/unbind/', undefined, undefined, undefined, manualErrorPresentation)
 }
 
 /**
@@ -130,7 +132,7 @@ export function everydaySignIn() {
  * @returns IMyAccountsRes 账户列表
  */
 export function getMyAccounts() {
-  return http.get<IMyAccountsRes>('/api/v2/auth/my-accounts/')
+  return http.get<IMyAccountsRes>('/api/v2/auth/my-accounts/', undefined, undefined, manualErrorPresentation)
 }
 
 /**
@@ -141,7 +143,7 @@ export function getMyAccounts() {
  * @deprecated
  */
 export function checkLogin() {
-  return http.get<ICheckLoginRes>('/api/v2/auth/check-login/')
+  return http.get<ICheckLoginRes>('/api/v2/auth/check-login/', undefined, undefined, manualErrorPresentation)
 }
 
 /**
@@ -149,5 +151,5 @@ export function checkLogin() {
  * @returns ITicketRes ticket和过期时间
  */
 export function getTicket() {
-  return http.post<ITicketRes>('/api/v2/auth/ticket/')
+  return http.post<ITicketRes>('/api/v2/auth/ticket/', undefined, undefined, undefined, manualErrorPresentation)
 }

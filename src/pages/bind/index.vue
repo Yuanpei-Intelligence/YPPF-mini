@@ -1,7 +1,10 @@
 <script lang="ts" setup>
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { onLoad } from '@dcloudio/uni-app'
 import { ref } from 'vue'
 import { getUserMe, wxBind } from '@/api/login'
+import ApiFieldError from '@/components/ApiFieldError.vue'
+import { useApiException } from '@/hooks/useApiException'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
 import { openWebview } from '@/utils'
@@ -16,6 +19,15 @@ const signedOpenid = ref('')
 const username = ref('')
 const password = ref('')
 const agreedToTerms = ref(false)
+const submitting = ref(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const {
+  clearFieldError,
+  getFieldMessages,
+  handleApiException,
+  setFieldError,
+  showMessage,
+} = useApiException(toastRef)
 const tokenStore = useTokenStore()
 const userStore = useUserStore()
 
@@ -32,27 +44,43 @@ onLoad((options) => {
     signedOpenid.value = decodeURIComponent(options.signed_openid)
   }
   else {
-    uni.showToast({
-      title: '缺少签名OpenID',
-      icon: 'none',
-    })
+    setFieldError('signed_openid', '缺少微信绑定凭据。', 'required')
   }
 })
 
+onReady(() => {
+  if (!signedOpenid.value)
+    showMessage('缺少微信绑定凭据，请重新登录。', 'warning')
+})
+
 async function handleBind() {
-  if (!username.value || !password.value) {
-    uni.showToast({ title: '请输入用户名和密码', icon: 'none' })
+  if (submitting.value)
+    return
+  let invalid = false
+  if (!username.value) {
+    setFieldError('username', '请输入用户名。', 'required')
+    invalid = true
+  }
+  if (!password.value) {
+    setFieldError('password', '请输入密码。', 'required')
+    invalid = true
+  }
+  if (invalid) {
+    showMessage('请填写用户名和密码。', 'warning')
     return
   }
   if (!agreedToTerms.value) {
-    uni.showToast({ title: '请先阅读并同意用户协议与隐私政策', icon: 'none' })
+    setFieldError('terms', '请先阅读并同意用户协议与隐私政策。', 'required')
+    showMessage('请先同意用户协议与隐私政策。', 'warning')
     return
   }
   if (!signedOpenid.value) {
-    uni.showToast({ title: '参数错误', icon: 'none' })
+    setFieldError('signed_openid', '绑定凭据无效，请重新登录。', 'invalid')
+    showMessage('绑定凭据无效，请重新登录。', 'warning')
     return
   }
 
+  submitting.value = true
   try {
     const res = await wxBind({
       username: username.value,
@@ -73,7 +101,7 @@ async function handleBind() {
         account_id: res.account_id ?? '',
         username: res.username ?? '',
       })
-      uni.showToast({ title: '绑定成功', icon: 'success' })
+      showMessage('绑定成功。', 'success')
       setTimeout(() => {
         uni.reLaunch({ url: '/pages/index/index' })
       }, 1500)
@@ -81,11 +109,16 @@ async function handleBind() {
   }
   catch (err) {
     console.error(err)
+    handleApiException(err)
+  }
+  finally {
+    submitting.value = false
   }
 }
 </script>
 
 <template>
+  <uv-toast ref="toastRef" />
   <view class="bind-page">
     <view class="bind-header">
       <view class="bind-header__title">
@@ -104,7 +137,9 @@ async function handleBind() {
           class="bind-field__input"
           type="text"
           placeholder="请输入用户名"
+          @input="clearFieldError('username')"
         >
+        <ApiFieldError :messages="getFieldMessages('username')" />
       </view>
       <view class="bind-field">
         <text class="bind-field__label">密码</text>
@@ -114,7 +149,9 @@ async function handleBind() {
           type="text"
           password
           placeholder="请输入密码"
+          @input="clearFieldError('password')"
         >
+        <ApiFieldError :messages="getFieldMessages('password')" />
       </view>
       <view class="bind-links">
         <text class="bind-link" @click="openPublicWebview('/forgetpw/')">忘记密码</text>
@@ -122,7 +159,7 @@ async function handleBind() {
         <text class="bind-link" @click="openPublicWebview('/freshman/')">注册</text>
       </view>
 
-      <view class="bind-agree" @click="agreedToTerms = !agreedToTerms">
+      <view class="bind-agree" @click="agreedToTerms = !agreedToTerms; clearFieldError('terms')">
         <view
           class="bind-checkbox"
           :class="{ 'bind-checkbox--checked': agreedToTerms }"
@@ -136,10 +173,12 @@ async function handleBind() {
           <text class="bind-agree__link" @click="toTerms">《隐私政策》</text>
         </view>
       </view>
+      <ApiFieldError :messages="getFieldMessages('terms')" />
+      <ApiFieldError :messages="getFieldMessages('signed_openid')" />
 
-      <button class="bind-btn" @click="handleBind">
+      <uv-button type="primary" shape="circle" :loading="submitting" :disabled="submitting" @click="handleBind">
         绑定
-      </button>
+      </uv-button>
     </view>
   </view>
 </template>

@@ -1,5 +1,7 @@
 <script lang="ts" setup>
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { getTicket } from '@/api/login'
+import { useApiException } from '@/hooks/useApiException'
 import { toBackendURL } from '@/utils'
 
 definePage({
@@ -13,6 +15,8 @@ const ticket = ref('')
 const isPublic = ref(false)
 const loading = ref(true)
 const loadFailed = ref(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException } = useApiException(toastRef)
 const url = computed(() => {
   if (loading.value || loadFailed.value)
     return ''
@@ -32,10 +36,7 @@ async function ensureTicketReady() {
   }
   catch (err) {
     console.error(err)
-    uni.showToast({
-      title: '登录失败',
-      icon: 'error',
-    })
+    handleApiException(err)
     loadFailed.value = true
     return false
   }
@@ -55,6 +56,7 @@ onLoad(async (options) => {
 
 <template>
   <view class="h-full w-full">
+    <uv-toast ref="toastRef" />
     <web-view v-if="url" :src="url" />
     <view v-else class="h-full w-full flex items-center justify-center text-sm text-gray-500">
       <text>{{ loadFailed ? '页面加载失败' : '页面加载中...' }}</text>

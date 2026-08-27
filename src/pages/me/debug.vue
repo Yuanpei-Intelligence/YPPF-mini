@@ -1,5 +1,8 @@
 <script lang="ts" setup>
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { storeToRefs } from 'pinia'
+import { useApiException } from '@/hooks/useApiException'
+import { BIND_PAGE } from '@/router/config'
 import { useUserStore } from '@/store'
 import { useTokenStore } from '@/store/token'
 import { openWebview } from '@/utils'
@@ -9,26 +12,33 @@ const userStore = useUserStore()
 const tokenStore = useTokenStore()
 // 使用storeToRefs解构userInfo
 const { userInfo } = storeToRefs(userStore)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 
 const activityId = ref<string>('')
 
 function handleNavigateToCheckin() {
   if (!activityId.value) {
-    uni.showToast({
-      title: '请输入活动ID',
-      icon: 'none',
-    })
+    showMessage('请输入活动ID。', 'warning')
     return
   }
   uni.navigateTo({ url: `/pages/activity/checkin?scene=qd_${activityId.value}` })
 }
-function handleForceRelogin() {
+async function handleForceRelogin() {
   const myUsername = userInfo.value.username
-  tokenStore.wxLogin(myUsername)
-  uni.showToast({
-    title: '重新登录成功',
-    icon: 'success',
-  })
+  try {
+    const result = await tokenStore.wxLogin(myUsername)
+    if (result.status === 'unbound') {
+      await uni.navigateTo({
+        url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(result.signed_openid)}`,
+      })
+      return
+    }
+    showMessage('重新登录成功。', 'success')
+  }
+  catch (error) {
+    handleApiException(error)
+  }
 }
 
 function handleNavigateToWebview() {
@@ -38,6 +48,7 @@ function handleNavigateToWebview() {
 
 <template>
   <view class="min-h-screen bg-gray-50 pb-10">
+    <uv-toast ref="toastRef" />
     <view class="p-4">
       <view class="mb-4">
         <text class="text-lg font-bold">调试信息</text>

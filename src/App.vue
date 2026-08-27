@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onHide, onLaunch, onShow } from '@dcloudio/uni-app'
+import { BIND_PAGE } from '@/router/config'
 import { navigateToInterceptor } from '@/router/interceptor'
 import { useTokenStore } from './store'
 
@@ -9,6 +10,16 @@ onLaunch((options) => {
   // #ifdef MP-WEIXIN
   const tokenStore = useTokenStore()
   tokenStore.wxLogin()
+    .then((result) => {
+      if (result.status === 'unbound') {
+        uni.navigateTo({
+          url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(result.signed_openid)}`,
+        })
+      }
+    })
+    .catch((error) => {
+      console.error('自动登录失败:', error)
+    })
   // #endif
 })
 onShow((options) => {

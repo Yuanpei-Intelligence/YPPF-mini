@@ -18,8 +18,8 @@ let refreshing = false // 防止重复刷新 token 标识
 let taskQueue: (() => void)[] = [] // 刷新 token 请求队列
 const NO_RETRY_PATHS = [
   '/pages/login/index',
-  '/auth/wx/bind', // 防止死锁
-  '/auth/wx/login',
+  '/api/v2/auth/wx/bind/', // 匿名绑定端点的 401 是凭据错误，不能触发微信重登
+  '/api/v2/auth/wx/login/',
   ...LOGIN_PAGE_LIST,
 ]
 
@@ -47,13 +47,23 @@ export function http<T>(options: CustomRequestOptions) {
           if (!isDoubleTokenMode) {
             // #ifdef MP-WEIXIN
             console.log('token 过期，尝试重新登录')
-            const res = await tokenStore.wxLogin()
+            let loginResult: Awaited<ReturnType<typeof tokenStore.wxLogin>>
+            try {
+              loginResult = await tokenStore.wxLogin()
+            }
+            catch (error) {
+              return reject(error)
+            }
             // 未绑定账号，跳转到绑定页面，防止死锁
-            if (res.status === 'unbound') {
+            if (loginResult.status === 'unbound') {
               uni.navigateTo({
-                url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(res.signed_openid)}`,
+                url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(loginResult.signed_openid)}`,
               })
-              return reject(res)
+              return reject(createResponseError(401, {
+                code: 'auth.binding_required',
+                message: '请先绑定微信账号。',
+                errors: {},
+              }))
             }
             // 绑定的账号，说明登录了，重新尝试发送请求
             return resolve(http<T>(options))

@@ -6,7 +6,7 @@ import {
 } from '@/api/notification'
 import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
-import { LOGIN_PAGE } from '@/router/config'
+import { BIND_PAGE, LOGIN_PAGE } from '@/router/config'
 import { useUserStore } from '@/store'
 import { useTokenStore } from '@/store/token'
 import { openWebview, toBackendURL } from '@/utils'
@@ -23,7 +23,14 @@ const userStore = useUserStore()
 const tokenStore = useTokenStore()
 const { userInfo } = storeToRefs(userStore)
 const toastRef = ref<UvToastInstance | null>(null)
-const { handleApiException } = useApiException(toastRef)
+const { handleApiException, showMessage } = useApiException(toastRef)
+
+interface UvModalInstance {
+  open: () => void
+  close: () => void
+}
+
+const unbindModalRef = ref<UvModalInstance | null>(null)
 
 // 默认头像
 const defaultAvatar = '/static/images/default-avatar.png'
@@ -33,8 +40,17 @@ const showUnbind = computed(() => userInfo.value.account_id === userInfo.value.u
 // 微信小程序下登录
 async function handleLogin() {
   // #ifdef MP-WEIXIN
-  // 微信登录
-  await tokenStore.wxLogin()
+  try {
+    const result = await tokenStore.wxLogin()
+    if (result.status === 'unbound') {
+      uni.navigateTo({
+        url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(result.signed_openid)}`,
+      })
+    }
+  }
+  catch (error) {
+    handleApiException(error)
+  }
   // #endif
   // #ifndef MP-WEIXIN
   uni.navigateTo({
@@ -44,38 +60,30 @@ async function handleLogin() {
 }
 
 function handleUnbind() {
-  uni.showModal({
-    title: '提示',
-    content: '确定要解除绑定吗？',
-    success: (res) => {
-      if (res.confirm) {
-        tokenStore.unbind()
-        uni.showToast({
-          title: '已解除绑定',
-          icon: 'success',
-        })
-      }
-    },
-  })
+  unbindModalRef.value?.open()
+}
+
+async function confirmUnbind() {
+  try {
+    await tokenStore.unbind()
+    showMessage('已解除绑定。', 'success')
+  }
+  catch (error) {
+    handleApiException(error)
+  }
 }
 
 async function handleGotoMain() {
   try {
     await tokenStore.wxLogin(userInfo.value.account_id)
-    uni.showToast({
-      title: '切换成功',
-      icon: 'success',
-    })
+    showMessage('切换成功。', 'success')
     setTimeout(() => {
       uni.reLaunch({ url: '/pages/me/me' })
     }, 1500)
   }
   catch (error) {
     console.error('切换账户失败:', error)
-    uni.showToast({
-      title: '切换失败，请重试',
-      icon: 'error',
-    })
+    handleApiException(error)
   }
 }
 
@@ -142,10 +150,7 @@ function handleProfile() {
     void openWebview({ uri: '/orginfo' })
   }
   else {
-    uni.showToast({
-      title: '您没有主页',
-      icon: 'error',
-    })
+    showMessage('您没有主页。', 'warning')
   }
 }
 </script>
@@ -153,6 +158,13 @@ function handleProfile() {
 <template>
   <view class="min-h-screen bg-gray-50 pb-10">
     <uv-toast ref="toastRef" />
+    <uv-modal
+      ref="unbindModalRef"
+      title="解除微信绑定"
+      content="确定要解除当前微信绑定吗？"
+      show-cancel-button
+      @confirm="confirmUnbind"
+    />
     <!-- 顶部用户信息 -->
     <view class="relative bg-blue-600 px-6 pb-14 pt-10">
       <view class="flex items-center">
