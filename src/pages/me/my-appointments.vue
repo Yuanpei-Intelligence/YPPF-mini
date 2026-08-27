@@ -1,12 +1,25 @@
 <script lang="ts" setup>
 import type { IMyAppointmentsResponse } from '@/api/types/appoint'
-import { getMyAppointments, cancelAppoint, renewLongtermAppoint } from '@/api/appoint'
+import type { UvToastInstance } from '@/hooks/useApiException'
+import { cancelAppoint, getMyAppointments, renewLongtermAppoint } from '@/api/appoint'
+import ApiFieldError from '@/components/ApiFieldError.vue'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
     navigationBarTitleText: '我的预约',
   },
 })
+
+interface UvPopupInstance {
+  open: () => void
+  close: () => void
+}
+
+interface UvModalInstance {
+  open: () => void
+  close: () => void
+}
 
 const tabIndex = ref<number>(0)
 const showLongterm = ref<boolean>(true)
@@ -18,7 +31,11 @@ const showRenewPopup = ref<boolean>(false)
 const currentRenewLongtermId = ref<number | null>(null)
 const selectedWeeks = ref<number>(1)
 const renewLoading = ref<boolean>(false)
-const renewPopupRef = ref<any>(null)
+const renewPopupRef = ref<UvPopupInstance | null>(null)
+const cancelModalRef = ref<UvModalInstance | null>(null)
+const pendingCancel = ref<{ id: number, isLongterm: boolean } | null>(null)
+const toastRef = ref<UvToastInstance | null>(null)
+const { clearFieldError, getFieldMessages, handleApiException, setFieldError, showMessage } = useApiException(toastRef)
 
 const futureList = computed(() => appointments.value?.appoint_list_future || [])
 const pastList = computed(() => appointments.value?.appoint_list_past || [])
@@ -44,10 +61,7 @@ async function fetchData() {
   }
   catch (error) {
     console.error(error)
-    uni.showToast({
-      icon: 'error',
-      title: '加载信息失败',
-    })
+    handleApiException(error)
   }
   finally {
     loading.value = false
@@ -105,18 +119,14 @@ function closeRenewPopup() {
 
 async function confirmRenew() {
   if (!currentRenewLongtermId.value) {
-    uni.showToast({
-      icon: 'none',
-      title: '请选择续约周数',
-    })
+    setFieldError('times', '请选择续约周数。', 'required')
+    showMessage('请选择续约周数。', 'warning')
     return
   }
 
   if (selectedWeeks.value <= 0) {
-    uni.showToast({
-      icon: 'none',
-      title: '续约周数必须大于0',
-    })
+    setFieldError('times', '续约周数必须大于 0。', 'min_value')
+    showMessage('续约周数必须大于 0。', 'warning')
     return
   }
 
@@ -126,19 +136,12 @@ async function confirmRenew() {
       longterm_id: currentRenewLongtermId.value,
       times: selectedWeeks.value,
     })
-    uni.showToast({
-      icon: 'success',
-      title: '续约成功',
-    })
+    showMessage('续约成功。', 'success')
     closeRenewPopup()
     fetchData()
   }
-  catch (error: any) {
-    const errorMsg = error?.data["times"] || '续约失败'
-    uni.showToast({
-      icon: 'none',
-      title: errorMsg,
-    })
+  catch (error) {
+    handleApiException(error)
   }
   finally {
     renewLoading.value = false
@@ -146,41 +149,43 @@ async function confirmRenew() {
 }
 
 function handleCancelAppoint(aid: number, isLongterm: boolean) {
-  uni.showModal({
-    title: '取消预约',
-    content: isLongterm ? '确定取消该长期预约吗？' : '确定取消该预约吗？',
-    success: (res) => {
-      if (res.confirm) {
-        _cancelAppoint(aid, isLongterm)
-      }
-    },
-  })
+  pendingCancel.value = { id: aid, isLongterm }
+  cancelModalRef.value?.open()
+}
+
+function confirmCancelAppoint() {
+  const pending = pendingCancel.value
+  if (!pending)
+    return
+  void _cancelAppoint(pending.id, pending.isLongterm)
+  pendingCancel.value = null
 }
 
 async function _cancelAppoint(aid: number, isLongterm: boolean) {
   try {
-    const res = await cancelAppoint({
+    await cancelAppoint({
       type: isLongterm ? 'longterm' : 'appoint',
       cancel_id: aid,
     })
-    uni.showToast({
-      icon: 'success',
-      title: "取消成功",
-    })
+    showMessage('取消成功。', 'success')
     fetchData()
   }
   catch (error) {
     console.error(error)
-    const errorMsg = error?.data[0] || '取消预约失败'
-    uni.showToast({
-      icon: 'none',
-      title: errorMsg,
-    })
+    handleApiException(error)
   }
 }
 </script>
 
 <template>
+  <uv-toast ref="toastRef" />
+  <uv-modal
+    ref="cancelModalRef"
+    title="取消预约"
+    :content="pendingCancel?.isLongterm ? '确定取消该长期预约吗？' : '确定取消该预约吗？'"
+    show-cancel-button
+    @confirm="confirmCancelAppoint"
+  />
   <view class="min-h-screen bg-gray-50 pb-10">
     <view class="sticky top-0 z-10 bg-white shadow-sm">
       <view v-if="appointments || loading" class="flex items-center justify-between border-b border-gray-100 bg-white px-4 py-2">
@@ -433,21 +438,23 @@ async function _cancelAppoint(aid: number, isLongterm: boolean) {
   <!-- 续约弹窗 -->
   <uv-popup ref="renewPopupRef" mode="bottom" :round="16" :close-on-click-overlay="true" @close="closeRenewPopup">
     <view class="bg-white pb-safe">
-      <view class="px-4 py-4 border-b border-gray-100">
-        <view class="text-lg text-gray-800 font-bold text-center">续约长期预约</view>
+      <view class="border-b border-gray-100 px-4 py-4">
+        <view class="text-center text-lg text-gray-800 font-bold">
+          续约长期预约
+        </view>
       </view>
-      
+
       <view class="px-4 py-6">
         <view class="mb-6 text-center text-sm text-gray-600">
           请选择续约周数
         </view>
-        
+
         <view class="flex items-center justify-center gap-6">
           <button
-            class="w-14 h-14 rounded-full border-2 border-gray-300 bg-white text-gray-600 font-bold text-xl flex items-center justify-center"
-            @click="selectedWeeks = Math.max(1, selectedWeeks - 1)"
+            class="h-14 w-14 flex items-center justify-center border-2 border-gray-300 rounded-full bg-white text-xl text-gray-600 font-bold"
             :disabled="selectedWeeks <= 1"
             :class="selectedWeeks <= 1 ? 'opacity-50' : 'active:bg-gray-50'"
+            @click="selectedWeeks = Math.max(1, selectedWeeks - 1); clearFieldError('times')"
           >
             −
           </button>
@@ -456,26 +463,27 @@ async function _cancelAppoint(aid: number, isLongterm: boolean) {
             <text class="ml-2 text-base text-gray-500">周</text>
           </view>
           <button
-            class="w-14 h-14 rounded-full border-2 border-gray-300 bg-white text-gray-600 font-bold text-xl flex items-center justify-center active:bg-gray-50"
-            @click="selectedWeeks = selectedWeeks + 1"
+            class="h-14 w-14 flex items-center justify-center border-2 border-gray-300 rounded-full bg-white text-xl text-gray-600 font-bold active:bg-gray-50"
+            @click="selectedWeeks = selectedWeeks + 1; clearFieldError('times')"
           >
             +
           </button>
         </view>
+        <ApiFieldError class="mt-3 text-center" :messages="getFieldMessages('times')" />
       </view>
 
-      <view class="px-4 pb-4 pt-2 flex gap-3">
+      <view class="flex gap-3 px-4 pb-4 pt-2">
         <button
           class="flex-1 border border-gray-300 rounded-lg bg-white py-3 text-gray-700 font-medium active:bg-gray-50"
-          @click="closeRenewPopup"
           :disabled="renewLoading"
+          @click="closeRenewPopup"
         >
           取消
         </button>
         <button
           class="flex-1 rounded-lg bg-blue-500 py-3 text-white font-medium active:bg-blue-600"
-          @click="confirmRenew"
           :disabled="renewLoading"
+          @click="confirmRenew"
         >
           {{ renewLoading ? '提交中...' : '确认续约' }}
         </button>

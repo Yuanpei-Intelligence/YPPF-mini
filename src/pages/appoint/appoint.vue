@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import type { IIndexResponse, IRoom } from '@/api/types/appoint'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { getAgreement, getIndexStatus } from '@/api/appoint'
+import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
 
 definePage({
@@ -15,6 +17,8 @@ const statusData = ref<IIndexResponse>()
 const loading = ref(false)
 const activeTab = ref(0)
 const agreementTime = ref<string | null>(null)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException } = useApiException(toastRef)
 
 // 公告列表
 const announcements = computed(() => {
@@ -105,10 +109,7 @@ async function fetchData() {
   }
   catch (error) {
     console.error('获取预约状态失败:', error)
-    uni.showToast({
-      title: '加载失败',
-      icon: 'none',
-    })
+    handleApiException(error)
   }
   finally {
     loading.value = false
@@ -116,15 +117,19 @@ async function fetchData() {
 }
 
 async function checkAgreementStatus() {
-  const res = await getAgreement()
-  if (!res.agree_time) {
-    uni.navigateTo({
-      url: `/pages/appoint/agreement`,
-    })
-    return
+  try {
+    const res = await getAgreement()
+    if (!res.agree_time) {
+      uni.navigateTo({
+        url: `/pages/appoint/agreement`,
+      })
+      return
+    }
+    agreementTime.value = res.agree_time
   }
-  agreementTime.value = res.agree_time
-  console.log(agreementTime.value)
+  catch (error) {
+    handleApiException(error)
+  }
 }
 
 // 页面自动刷新：从其他页面返回时自动更新数据
@@ -178,6 +183,7 @@ function formatTime(time: string) {
       </view>
     </template>
   </uv-navbar>
+  <uv-toast ref="toastRef" />
   <!-- 公告栏 -->
   <view v-if="announcements.length > 0" class="px-3 pt-3">
     <uv-notice-bar

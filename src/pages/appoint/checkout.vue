@@ -1,6 +1,9 @@
 <script lang="ts" setup>
 import type { ICheckoutAppointRequest, ICheckoutInfoResponse, ISearchUserItem } from '@/api/types/appoint'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { createAppoint, getCheckoutInfo, searchUsers } from '@/api/appoint'
+import ApiFieldError from '@/components/ApiFieldError.vue'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -22,6 +25,14 @@ const timestr = ref<string>('')
 const loading = ref(false)
 const submitting = ref(false)
 const data = ref<ICheckoutInfoResponse>()
+const toastRef = ref<UvToastInstance | null>(null)
+const {
+  clearFieldError,
+  getFieldMessages,
+  handleApiException,
+  setFieldError,
+  showMessage,
+} = useApiException(toastRef)
 
 // 表单数据
 const formData = reactive({
@@ -75,6 +86,7 @@ async function performSearch() {
   catch (error) {
     console.error('搜索用户失败:', error)
     searchResults.value = []
+    handleApiException(error)
   }
   finally {
     searchLoading.value = false
@@ -179,10 +191,7 @@ async function fetchData() {
   }
   catch (error) {
     console.error(error)
-    uni.showToast({
-      icon: 'error',
-      title: '加载失败',
-    })
+    handleApiException(error)
   }
   finally {
     loading.value = false
@@ -193,10 +202,11 @@ async function fetchData() {
 function addStudentFromSearch(user: ISearchUserItem) {
   const id = String(user.id)
   if (formData.students.includes(id)) {
-    uni.showToast({ title: '该成员已添加', icon: 'none' })
+    showMessage('该成员已添加。', 'warning')
     return
   }
   formData.students.push(id)
+  clearFieldError('students')
   memberNames.value[id] = user.name
   searchQuery.value = ''
   searchResults.value = []
@@ -205,9 +215,10 @@ function addStudentFromSearch(user: ISearchUserItem) {
 // 有内容时结果区一直展示，不收起到 onSearchBlur；仅当清空搜索框时收起
 
 // 处理外院人数输入
-function onNonYpNumInput(e: any) {
+function onNonYpNumInput(e: { detail: { value: string } }) {
   const val = Number.parseInt(e.detail.value) || 0
   formData.non_yp_num = Math.max(0, Math.min(val, maxPeople.value))
+  clearFieldError('non_yp_num')
 }
 
 // 移除成员
@@ -226,23 +237,29 @@ async function addAllMembers() {
     .map(id => String(id))
     .filter(sid => !formData.students.includes(sid))
   if (toAdd.length === 0) {
-    uni.showToast({ title: '没有可添加的成员', icon: 'none' })
+    showMessage('没有可添加的成员。')
     return
   }
   toAdd.forEach(sid => formData.students.push(sid))
   // 通过 searchUsers 按 id 解析姓名，避免列表显示 id
-  const results = await Promise.all(
-    toAdd.map(sid =>
-      searchUsers({ query: sid, limit: 10 }).then((list) => {
-        const user = list.find(u => String(u.id) === sid)
-        return { sid, name: user ? user.name : sid }
-      }),
-    ),
-  )
-  results.forEach(({ sid, name }) => {
-    memberNames.value[sid] = name
-  })
-  uni.showToast({ title: `已添加 ${toAdd.length} 人`, icon: 'none' })
+  try {
+    const results = await Promise.all(
+      toAdd.map(sid =>
+        searchUsers({ query: sid, limit: 10 }).then((list) => {
+          const user = list.find(u => String(u.id) === sid)
+          return { sid, name: user ? user.name : sid }
+        }),
+      ),
+    )
+    results.forEach(({ sid, name }) => {
+      memberNames.value[sid] = name
+    })
+    clearFieldError('students')
+    showMessage(`已添加 ${toAdd.length} 人。`, 'success')
+  }
+  catch (error) {
+    handleApiException(error)
+  }
 }
 
 // 清空所有成员
@@ -253,16 +270,18 @@ function clearAllMembers() {
 
 // 提交预约
 async function submitAppoint() {
-  if (!canSubmit.value || submitting.value)
+  if (submitting.value)
     return
 
   // 验证
   if (!formData.Ausage.trim()) {
-    uni.showToast({ title: '请填写预约用途', icon: 'none' })
+    setFieldError('Ausage', '请填写预约用途。', 'required')
+    showMessage('请检查预约表单。', 'warning')
     return
   }
   if (!isPeopleValid.value) {
-    uni.showToast({ title: `人数需在 ${minPeople.value}-${maxPeople.value} 人之间`, icon: 'none' })
+    setFieldError('students', `人数需在 ${minPeople.value}-${maxPeople.value} 人之间。`, 'invalid_count')
+    showMessage('请检查预约人数。', 'warning')
     return
   }
 
@@ -292,20 +311,17 @@ async function submitAppoint() {
       requestData.interview = true
     }
 
-    const res = await createAppoint(requestData)
+    await createAppoint(requestData)
 
-    uni.showToast({
-      icon: 'success',
-      title: isLongterm.value ? '已提交审核' : '预约成功',
-    })
+    showMessage(isLongterm.value ? '已提交审核。' : '预约成功。', 'success')
     // 返回上一页或跳转到我的预约
     setTimeout(() => {
       uni.navigateBack({ delta: 2 })
     }, 1500)
   }
-  catch (error: any) {
+  catch (error) {
     console.error(error)
-    // 如果请求失败，失败的信息由http 包负责显示
+    handleApiException(error)
   }
   finally {
     submitting.value = false
@@ -326,6 +342,7 @@ function goBack() {
     left-icon="arrow-left"
     @left-click="goBack"
   />
+  <uv-toast ref="toastRef" />
   <!-- 加载状态 -->
   <view v-if="loading" class="flex items-center justify-center py-20">
     <uv-loading-icon mode="circle" />
@@ -402,12 +419,13 @@ function goBack() {
             :class="formData.interval === opt.value
               ? 'bg-blue-500 text-white'
               : 'bg-gray-100 text-gray-600'"
-            @click="formData.interval = opt.value"
+            @click="formData.interval = opt.value; clearFieldError('interval')"
           >
             {{ opt.label }}
           </view>
         </view>
       </view>
+      <ApiFieldError class="px-4" :messages="getFieldMessages('interval')" />
 
       <!-- 预约次数 -->
       <view class="flex items-center justify-between border-b border-gray-100 px-4 py-3">
@@ -417,7 +435,7 @@ function goBack() {
         <view class="flex items-center gap-2">
           <view
             class="h-8 w-8 flex items-center justify-center rounded-full bg-gray-100"
-            @click="formData.times > 2 && formData.times--"
+            @click="formData.times > 2 && formData.times--; clearFieldError('times')"
           >
             <div class="i-carbon-subtract text-gray-600" />
           </view>
@@ -426,12 +444,13 @@ function goBack() {
           </view>
           <view
             class="h-8 w-8 flex items-center justify-center rounded-full bg-gray-100"
-            @click="formData.times < 16 && formData.times++"
+            @click="formData.times < 16 && formData.times++; clearFieldError('times')"
           >
             <div class="i-carbon-add text-gray-600" />
           </view>
         </view>
       </view>
+      <ApiFieldError class="px-4" :messages="getFieldMessages('times')" />
 
       <!-- 开始周次 -->
       <view class="flex items-center justify-between px-4 py-3">
@@ -445,10 +464,11 @@ function goBack() {
         </view>
         <view class="flex items-center gap-2">
           <text class="text-sm" :class="startWeek === 0 ? 'text-blue-600 font-medium' : 'text-gray-400'">本周</text>
-          <wd-switch :model-value="startWeek === 1" size="20px" @change="startWeek = $event.value ? 1 : 0" />
+          <wd-switch :model-value="startWeek === 1" size="20px" @change="startWeek = $event.value ? 1 : 0; clearFieldError('start_week')" />
           <text class="text-sm" :class="startWeek === 1 ? 'text-blue-600 font-medium' : 'text-gray-400'">下周</text>
         </view>
       </view>
+      <ApiFieldError class="px-4" :messages="getFieldMessages('start_week')" />
     </view>
 
     <!-- 预约用途 -->
@@ -470,9 +490,10 @@ function goBack() {
           placeholder="请简要描述预约用途，如：小组讨论、项目会议等"
           :auto-height="true"
           :style="{ minHeight: '80px' }"
+          @input="clearFieldError('Ausage')"
         />
+        <ApiFieldError :messages="getFieldMessages('Ausage')" />
       </view>
-
       <!-- 预约通知（可选） -->
       <view class="px-4 py-3">
         <view class="flex items-center justify-between">
@@ -492,6 +513,7 @@ function goBack() {
           :style="{ minHeight: '60px' }"
         />
       </view>
+      <ApiFieldError class="px-4" :messages="getFieldMessages('non_yp_num')" />
     </view>
 
     <!-- 预约人数 -->
@@ -650,6 +672,7 @@ function goBack() {
       <view v-else class="px-4 py-4 text-center text-sm text-gray-400">
         暂未添加其他成员
       </view>
+      <ApiFieldError class="px-4 pb-3" :messages="getFieldMessages('students')" />
     </view>
 
     <!-- 提交按钮区域 -->
@@ -662,14 +685,15 @@ function goBack() {
         面试预约模式已开启
       </view>
 
-      <button
-        class="w-full rounded-lg py-3 text-base font-medium"
-        :class="canSubmit && !submitting ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-400'"
+      <uv-button
+        type="primary"
+        shape="circle"
+        :loading="submitting"
         :disabled="!canSubmit || submitting"
         @click="submitAppoint"
       >
         {{ submitting ? '提交中...' : (isLongterm ? '提交审核' : '确认预约') }}
-      </button>
+      </uv-button>
     </view>
 
     <!-- 底部占位 -->
@@ -679,9 +703,11 @@ function goBack() {
   <!-- 无数据状态 -->
   <view v-else class="flex flex-col items-center justify-center py-20">
     <text class="text-gray-400">加载失败</text>
-    <button class="mt-4 rounded-lg bg-blue-500 px-6 py-2 text-white" @click="fetchData">
-      重新加载
-    </button>
+    <view class="mt-4 w-32">
+      <uv-button type="primary" shape="circle" @click="fetchData">
+        重新加载
+      </uv-button>
+    </view>
   </view>
 </template>
 
