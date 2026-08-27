@@ -1,7 +1,8 @@
 <!-- 这一页真应该改成分页显示，卡死了这个玩意，有些人不喜欢点掉未读一攒好几百条 -->
 <script lang="ts" setup>
 import type { Notification, NotificationListQuery } from '@/api/types/notification'
-import { onMounted, ref } from 'vue'
+import type { UvToastInstance } from '@/hooks/useApiException'
+import { computed, onMounted, ref } from 'vue'
 import {
   deleteAllReadNotifications,
   getNotificationStatistics,
@@ -10,6 +11,7 @@ import {
   toggleNotificationStatus,
 } from '@/api/notification'
 import { NotificationStatus, NotificationType } from '@/api/types/notification'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -18,6 +20,13 @@ definePage({
     navigationBarTextStyle: 'white',
   },
 })
+
+interface UvModalInstance {
+  open: () => void
+  close: () => void
+}
+
+type BulkAction = 'deleteAllRead' | 'markAllRead'
 
 // 状态管理
 const notifications = ref<Notification[]>([])
@@ -30,6 +39,23 @@ const statistics = ref({
 })
 const loading = ref(false)
 const refreshing = ref(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const confirmationModalRef = ref<UvModalInstance | null>(null)
+const detailModalRef = ref<UvModalInstance | null>(null)
+const pendingBulkAction = ref<BulkAction | null>(null)
+const selectedNotification = ref<Notification | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
+
+const confirmationContent = computed(() => (
+  pendingBulkAction.value === 'markAllRead'
+    ? '确定要将所有通知标记为已读吗？'
+    : '确定要删除所有已读通知吗？'
+))
+const detailConfirmText = computed(() => (
+  selectedNotification.value?.status === NotificationStatus.UNDONE
+    ? '标记已读'
+    : '知道了'
+))
 
 // 筛选状态
 const activeTab = ref<'all' | 'unread' | 'read'>('all')
@@ -54,10 +80,7 @@ async function loadNotifications() {
   }
   catch (error) {
     console.error('加载通知失败:', error)
-    uni.showToast({
-      title: '加载失败',
-      icon: 'none',
-    })
+    handleApiException(error)
   }
   finally {
     loading.value = false
@@ -71,6 +94,7 @@ async function loadStatistics() {
   }
   catch (error) {
     console.error('加载统计失败:', error)
+    handleApiException(error)
   }
 }
 
@@ -88,92 +112,66 @@ async function handleToggleStatus(notification: Notification) {
   }
   catch (error) {
     console.error('切换状态失败:', error)
-    uni.showToast({
-      title: '操作失败',
-      icon: 'none',
-    })
+    handleApiException(error)
   }
 }
 
 // 标记所有为已读
-async function handleMarkAllRead() {
-  uni.showModal({
-    title: '提示',
-    content: '确定要将所有通知标记为已读吗？',
-    success: async (res) => {
-      if (res.confirm) {
-        try {
-          await markAllNotificationsRead()
-          uni.showToast({
-            title: '已标记为已读',
-            icon: 'success',
-          })
-          await loadNotifications()
-          await loadStatistics()
-        }
-        catch (error) {
-          console.error('标记失败:', error)
-          uni.showToast({
-            title: '操作失败',
-            icon: 'none',
-          })
-        }
-      }
-    },
-  })
+function handleMarkAllRead() {
+  pendingBulkAction.value = 'markAllRead'
+  confirmationModalRef.value?.open()
 }
 
 // 删除所有已读通知
-async function handleDeleteAllRead() {
-  uni.showModal({
-    title: '提示',
-    content: '确定要删除所有已读通知吗？',
-    success: async (res) => {
-      if (res.confirm) {
-        try {
-          await deleteAllReadNotifications()
-          uni.showToast({
-            title: '删除成功',
-            icon: 'success',
-          })
-          await loadNotifications()
-          await loadStatistics()
-        }
-        catch (error) {
-          console.error('删除失败:', error)
-          uni.showToast({
-            title: '操作失败',
-            icon: 'none',
-          })
-        }
-      }
-    },
-  })
+function handleDeleteAllRead() {
+  pendingBulkAction.value = 'deleteAllRead'
+  confirmationModalRef.value?.open()
+}
+
+async function confirmBulkAction() {
+  const action = pendingBulkAction.value
+  if (!action)
+    return
+
+  try {
+    const result = action === 'markAllRead'
+      ? await markAllNotificationsRead()
+      : await deleteAllReadNotifications()
+    showMessage(result.message, 'success')
+    await Promise.all([loadNotifications(), loadStatistics()])
+  }
+  catch (error) {
+    console.error('批量修改通知失败:', error)
+    handleApiException(error)
+  }
+  finally {
+    pendingBulkAction.value = null
+    confirmationModalRef.value?.close()
+  }
 }
 
 // 查看通知详情
 function handleViewDetail(notification: Notification) {
-  uni.showModal({
-    title: notification.title_display || '通知详情',
-    content: notification.content,
-    confirmText: notification.status === NotificationStatus.UNDONE ? '标记已读' : '知道了',
-    success: async (res) => {
-      if (res.confirm && notification.status === NotificationStatus.UNDONE) {
-        await handleToggleStatus(notification)
-      }
-      // 如果有URL，可以选择跳转
-      if (notification.URL) {
-        // uni.navigateTo({ url: notification.URL })
-      }
-    },
-  })
+  selectedNotification.value = notification
+  detailModalRef.value?.open()
+}
+
+async function confirmNotificationDetail() {
+  const notification = selectedNotification.value
+  selectedNotification.value = null
+  if (notification?.status === NotificationStatus.UNDONE)
+    await handleToggleStatus(notification)
 }
 
 // 下拉刷新
 async function onRefresh() {
-  refreshing.value = true
-  await Promise.all([loadNotifications(), loadStatistics()])
-  refreshing.value = false
+  try {
+    refreshing.value = true
+    await Promise.all([loadNotifications(), loadStatistics()])
+  }
+  finally {
+    refreshing.value = false
+  }
 }
 
 // 切换标签
@@ -215,12 +213,15 @@ async function handleNotificationAction(notification: Notification) {
       uni.setClipboardData({
         data: notification.URL,
         success: () => {
-          uni.showToast({ title: '链接已复制', icon: 'success' })
+          showMessage('链接已复制', 'success')
+        },
+        fail: () => {
+          showMessage('复制链接失败，请稍后重试。', 'error')
         },
       })
     }
     else {
-      uni.showToast({ title: '暂无处理链接', icon: 'none' })
+      showMessage('暂无处理链接', 'warning')
     }
     if (notification.status === NotificationStatus.UNDONE) {
       await handleToggleStatus(notification)
@@ -241,6 +242,23 @@ onMounted(() => {
 
 <template>
   <view class="min-h-screen bg-gray-50 pb-20">
+    <uv-toast ref="toastRef" />
+    <uv-modal
+      ref="confirmationModalRef"
+      title="请确认"
+      :content="confirmationContent"
+      show-cancel-button
+      @confirm="confirmBulkAction"
+      @cancel="pendingBulkAction = null"
+    />
+    <uv-modal
+      ref="detailModalRef"
+      :title="selectedNotification?.title_display || '通知详情'"
+      :content="selectedNotification?.content || ''"
+      :confirm-text="detailConfirmText"
+      @confirm="confirmNotificationDetail"
+      @close="selectedNotification = null"
+    />
     <!-- 筛选标签 -->
     <view class="sticky top-0 z-10 bg-white px-4 py-3 shadow-sm">
       <view class="mb-3 flex items-center justify-between">
@@ -296,7 +314,7 @@ onMounted(() => {
     <!-- 通知列表 -->
     <scroll-view scroll-y class="mt-3 box-border px-4">
       <view v-if="loading" class="py-20 text-center text-gray-400">
-        加载中...
+        <uv-loading-icon mode="circle" text="加载中" />
       </view>
 
       <view v-else-if="notifications.length === 0" class="py-20 text-center text-gray-400">
