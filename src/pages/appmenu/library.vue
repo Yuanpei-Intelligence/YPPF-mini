@@ -1,11 +1,18 @@
 <script lang="ts" setup>
-import type { Book, LendRecordList } from '@/api/types/library'
+import type {
+  Book,
+  LendRecordList,
+  LendRecordType,
+  LibrarySearchQuery,
+} from '@/api/types/library'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import {
   getLibraryConfig,
   getLibraryRecommendations,
   getLibraryRecords,
   searchLibraryBooks,
 } from '@/api/library'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -17,6 +24,8 @@ definePage({
 
 // 开放时间
 const openingHours = ref('')
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 
 // Tab展开状态
 const searchExpanded = ref(true)
@@ -46,10 +55,11 @@ let carouselTimer: number | null = null
 async function loadLibraryConfig() {
   try {
     const config = await getLibraryConfig()
-    openingHours.value = config.opening_hours || '07:00 - 23:00'
+    openingHours.value = `${config.opening_time_start} - ${config.opening_time_end}`
   }
   catch (error) {
     console.error('加载配置失败:', error)
+    handleApiException(error)
   }
 }
 
@@ -60,6 +70,7 @@ async function loadRecommendations() {
   }
   catch (error) {
     console.error('加载推荐书籍失败:', error)
+    handleApiException(error)
   }
 }
 
@@ -70,6 +81,7 @@ async function loadRecords() {
   }
   catch (error) {
     console.error('加载借阅记录失败:', error)
+    handleApiException(error)
   }
 }
 
@@ -77,16 +89,13 @@ async function loadRecords() {
 async function handleSearch() {
   // 如果没有输入关键词且没有选择"可借阅"，提示输入
   if (!searchKeyword.value.trim() && !onlyAvailable.value) {
-    uni.showToast({
-      title: '请输入搜索关键词',
-      icon: 'none',
-    })
+    showMessage('请输入搜索关键词', 'warning')
     return
   }
 
   try {
     searching.value = true
-    const query: any = {}
+    const query: LibrarySearchQuery = {}
 
     // 如果有搜索关键词，添加keywords参数
     if (searchKeyword.value.trim()) {
@@ -102,10 +111,7 @@ async function handleSearch() {
   }
   catch (error) {
     console.error('搜索失败:', error)
-    uni.showToast({
-      title: '搜索失败',
-      icon: 'none',
-    })
+    handleApiException(error)
   }
   finally {
     searching.value = false
@@ -129,12 +135,20 @@ function toggleRecords() {
   }
 }
 
-// 获取书籍信息（处理 book 可能是对象或 ID 的情况）
-function getBookInfo(record: LendRecordList): Book | null {
-  if (typeof record.book === 'object') {
-    return record.book
+function getRecordStatusInfo(type: LendRecordType) {
+  if (type === 'returned') {
+    return { text: '已归还', className: 'bg-green-100 text-green-600' }
   }
-  return null
+  if (type === 'overtime_returned') {
+    return { text: '逾期归还', className: 'bg-gray-100 text-gray-600' }
+  }
+  if (type === 'overtime') {
+    return { text: '已逾期', className: 'bg-red-100 text-red-600' }
+  }
+  if (type === 'approaching') {
+    return { text: '即将到期', className: 'bg-yellow-100 text-yellow-700' }
+  }
+  return { text: '借阅中', className: 'bg-orange-100 text-orange-600' }
 }
 
 // 格式化时间
@@ -181,6 +195,7 @@ onUnmounted(() => {
 
 <template>
   <view class="min-h-screen bg-gray-50">
+    <uv-toast ref="toastRef" />
     <!-- 顶部背景图片区域 -->
     <view
       class="relative w-full overflow-hidden"
@@ -302,21 +317,18 @@ onUnmounted(() => {
               :key="record.id"
               class="border border-gray-200 rounded-lg bg-white p-3"
             >
-              <view v-if="getBookInfo(record)" class="mb-2">
+              <view class="mb-2">
                 <view class="text-base text-gray-800 font-bold">
-                  {{ getBookInfo(record)?.title }}
-                </view>
-                <view class="mt-1 text-xs text-gray-500">
-                  {{ getBookInfo(record)?.author || '未知作者' }}
+                  {{ record.book_id__title || '未知书籍' }}
                 </view>
               </view>
               <view class="flex items-center justify-between text-xs text-gray-500">
                 <text>借阅时间：{{ formatTime(record.lend_time) }}</text>
                 <view
                   class="rounded-full px-2 py-1"
-                  :class="record.returned ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'"
+                  :class="getRecordStatusInfo(record.type).className"
                 >
-                  {{ record.returned ? '已归还' : '未归还' }}
+                  {{ getRecordStatusInfo(record.type).text }}
                 </view>
               </view>
             </view>
