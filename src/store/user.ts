@@ -5,11 +5,22 @@ import { getUserMe } from '@/api/login'
 
 // 初始化状态
 const userInfoState: IUserInfoRes = {
+  id: -1,
   userId: -1,
   username: '',
   account_id: '',
   nickname: '',
+  name: '',
+  utype: '',
+  active: false,
+  is_staff: false,
+  is_person: false,
+  is_org: false,
   avatar: '/static/images/default-avatar.png',
+  avatar_url: '',
+  wallpaper_url: '',
+  absolute_url: '',
+  profile: {},
 }
 
 export const useUserStore = defineStore(

@@ -132,7 +132,8 @@ onMounted(async () => {
   try {
     await getUserMe()
   }
-  catch {
+  catch (error) {
+    handleApiException(error, { showToast: false })
     return
   }
 
@@ -149,6 +150,7 @@ onMounted(async () => {
   }
   catch (error) {
     console.error('每日签到失败:', error)
+    handleApiException(error)
   }
 
   await refresh()

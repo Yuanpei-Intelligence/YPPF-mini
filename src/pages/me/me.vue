@@ -1,8 +1,10 @@
 <script lang="ts" setup>
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { storeToRefs } from 'pinia'
 import {
   getNotificationStatistics,
 } from '@/api/notification'
+import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
 import { LOGIN_PAGE } from '@/router/config'
 import { useUserStore } from '@/store'
@@ -20,6 +22,8 @@ definePage({
 const userStore = useUserStore()
 const tokenStore = useTokenStore()
 const { userInfo } = storeToRefs(userStore)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException } = useApiException(toastRef)
 
 // 默认头像
 const defaultAvatar = '/static/images/default-avatar.png'
@@ -91,6 +95,7 @@ async function loadStatistics() {
   }
   catch (error) {
     console.error('加载统计失败:', error)
+    handleApiException(error)
   }
 }
 
@@ -101,7 +106,13 @@ usePageRefresh(
     // 加载未读信息数
     await loadStatistics()
     // 更新用户信息，如头像等
-    await userStore.fetchUserInfo()
+    try {
+      await userStore.fetchUserInfo()
+    }
+    catch (error) {
+      console.error('加载用户信息失败:', error)
+      handleApiException(error)
+    }
   },
   {
     shouldRefresh: () => tokenStore.hasLogin,
@@ -141,6 +152,7 @@ function handleProfile() {
 
 <template>
   <view class="min-h-screen bg-gray-50 pb-10">
+    <uv-toast ref="toastRef" />
     <!-- 顶部用户信息 -->
     <view class="relative bg-blue-600 px-6 pb-14 pt-10">
       <view class="flex items-center">

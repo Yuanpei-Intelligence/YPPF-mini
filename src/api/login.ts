@@ -92,7 +92,9 @@ export function refreshToken(refreshToken: string) {
  * @returns IUserInfoRes 用户信息
  */
 export function getUserMe() {
-  return http.get<IUserInfoRes>('/api/v2/user/me/')
+  return http.get<IUserInfoRes>('/api/v2/user/me/', undefined, undefined, {
+    errorPresentation: 'manual',
+  })
 }
 
 /**
@@ -114,7 +116,13 @@ export function getWxCode() {
  * @returns IEverydaySignInRes 文案和获得的数量
  */
 export function everydaySignIn() {
-  return http.post<IEverydaySignInRes>('/api/v2/user/daily-login/')
+  return http.post<IEverydaySignInRes>(
+    '/api/v2/user/daily-login/',
+    undefined,
+    undefined,
+    undefined,
+    { errorPresentation: 'manual' },
+  )
 }
 
 /**
