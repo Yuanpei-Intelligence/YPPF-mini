@@ -5,47 +5,12 @@ import { BIND_PAGE, LOGIN_PAGE_LIST } from '@/router/config'
 import { useTokenStore } from '@/store/token'
 import { isDoubleTokenMode } from '@/utils'
 import { toLoginPage } from '@/utils/toLoginPage'
+import { createNetworkError, createResponseError } from './errors'
 import { ResultEnum } from './tools/enum'
 
-/**
- * 将接口返回的错误 data 整理成可展示的字符串
- * 这是为了兼容DRF ValidationError和朴素API实现方式的格式
- * - 朴素API：若有 msg / message 直接使用；若为数组，用分号拼接
- * - DRF：若为dict且值为数组，如 {"字段名":["error1"]}，
- *        按 "key: value" 展开后用分号拼接
- */
-function formatErrorData(data: any): string {
-  // 默认
-  if (data == null)
-    return '请求错误'
-  // 朴素API
-  if (typeof data.msg === 'string' && data.msg)
-    return data.msg
-  if (typeof data.message === 'string' && data.message)
-    return data.message
-  if (Array.isArray(data)) {
-    const list = data.map(item => (typeof item === 'string' ? item : String(item)))
-    return list.length ? list.join('；') : '请求错误'
-  }
-  // DRF
-  if (typeof data === 'object') {
-    const parts: string[] = []
-    for (const value of Object.values(data)) {
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          const text = typeof item === 'string' ? item : String(item)
-          if (text)
-            parts.push(text)
-        }
-      }
-      else if (value != null && value !== '') {
-        parts.push(String(value))
-      }
-    }
-    return parts.length ? parts.join('；') : '请求错误'
-  }
-  // 其他情况
-  return '请求错误'
+/** 判断错误是否由采用新异常契约的页面自行展示。 */
+function usesManualErrorPresentation(options: CustomRequestOptions): boolean {
+  return options.errorPresentation === 'manual' || options.hideErrorToast === true
 }
 
 // 刷新 token 状态管理
@@ -174,21 +139,25 @@ export function http<T>(options: CustomRequestOptions) {
         }
 
         // 处理其他错误（401以外的）
-        if (!options.hideErrorToast) {
+        const requestError = createResponseError(res.statusCode, res.data)
+        if (!usesManualErrorPresentation(options)) {
           uni.showToast({
             icon: 'none',
-            title: formatErrorData(res.data),
+            title: requestError.message,
           })
         }
-        reject(res)
+        reject(requestError)
       },
       // 响应失败
       fail(err) {
-        uni.showToast({
-          icon: 'none',
-          title: '网络错误，换个网络试试',
-        })
-        reject(err)
+        const requestError = createNetworkError(err)
+        if (!usesManualErrorPresentation(options)) {
+          uni.showToast({
+            icon: 'none',
+            title: requestError.message,
+          })
+        }
+        reject(requestError)
       },
     } as UniApp.RequestOptions)
   })

@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { Feedback, FeedbackType, SolveStatus } from '@/api/types/feedback'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { onShow } from '@dcloudio/uni-app'
 import { storeToRefs } from 'pinia'
 import {
@@ -10,6 +11,7 @@ import {
   listInProgressFeedback,
   listPublicFeedback,
 } from '@/api/feedback'
+import { useApiException } from '@/hooks/useApiException'
 import { useUserStore } from '@/store/user'
 import { openWebview } from '@/utils'
 
@@ -21,6 +23,11 @@ definePage({
   },
 })
 
+interface UvModalInstance {
+  open: () => void
+  close: () => void
+}
+
 const feedbackTypes = ref<FeedbackType[]>([])
 const list = ref<Feedback[]>([])
 const listLoading = ref(false)
@@ -31,6 +38,10 @@ const myDraftList = ref<Feedback[]>([])
 const myInProgressList = ref<Feedback[]>([])
 const myDoneList = ref<Feedback[]>([])
 const myListLoading = ref(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const deleteModalRef = ref<UvModalInstance | null>(null)
+const pendingDelete = ref<Feedback | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 
 // 从query获得的aid信息，如果有，说明是准备申诉
 const aid = ref<number>(0)
@@ -82,7 +93,7 @@ async function loadList() {
   }
   catch (e) {
     console.error('加载公示栏失败', e)
-    uni.showToast({ title: '加载失败', icon: 'none' })
+    handleApiException(e)
   }
   finally {
     listLoading.value = false
@@ -110,7 +121,7 @@ async function loadMyFeedback() {
   }
   catch (e) {
     console.error('加载我的反馈失败', e)
-    uni.showToast({ title: '加载失败', icon: 'none' })
+    handleApiException(e)
   }
   finally {
     myListLoading.value = false
@@ -135,7 +146,7 @@ function handleAidIfNeeded() {
     }
     else {
       // 已经发布了提示，这个填完表之后，按返回键还会跳转回来，为了防止死锁不能再跳转
-      uni.showToast({ title: '您的申诉已经发布，请等待处理', icon: 'none' })
+      showMessage('您的申诉已经发布，请等待处理。', 'warning')
     }
     return
   }
@@ -166,6 +177,7 @@ async function loadTypes() {
   }
   catch (e) {
     console.error('加载反馈类型失败', e)
+    handleApiException(e)
   }
 }
 
@@ -241,27 +253,33 @@ function goEditDraft(draft: Feedback) {
 }
 
 // 删除草稿
-async function handleDeleteDraft(draft: Feedback, e?: Event) {
+function handleDeleteDraft(draft: Feedback, e?: Event) {
   if (e) {
     e.stopPropagation() // 阻止事件冒泡，避免触发卡片点击
   }
 
-  uni.showModal({
-    title: '确认删除',
-    content: '确认要删除反馈草稿吗？',
-    success: async (res) => {
-      if (res.confirm) {
-        try {
-          await deleteFeedback(draft.id)
-          uni.showToast({ title: '删除成功', icon: 'success' })
-          await loadMyFeedback() // 刷新列表
-        }
-        catch (e: any) {
-          console.error('删除草稿失败', e)
-        }
-      }
-    },
-  })
+  pendingDelete.value = draft
+  deleteModalRef.value?.open()
+}
+
+async function confirmDeleteDraft() {
+  const draft = pendingDelete.value
+  if (!draft)
+    return
+
+  try {
+    await deleteFeedback(draft.id)
+    showMessage('删除成功', 'success')
+    await loadMyFeedback()
+  }
+  catch (e) {
+    console.error('删除草稿失败', e)
+    handleApiException(e)
+  }
+  finally {
+    pendingDelete.value = null
+    deleteModalRef.value?.close()
+  }
 }
 
 // 点击反馈卡片：草稿跳转编辑，已发布的跳转详情
@@ -294,6 +312,15 @@ onShow(() => {
 
 <template>
   <view class="feedback-page min-h-screen bg-[#f8f9fa] pb-10">
+    <uv-toast ref="toastRef" />
+    <uv-modal
+      ref="deleteModalRef"
+      title="确认删除"
+      content="确认要删除反馈草稿吗？"
+      show-cancel-button
+      @confirm="confirmDeleteDraft"
+      @cancel="pendingDelete = null"
+    />
     <!-- 主界面：与网页版一致的布局 -->
     <view class="layout-top-spacing">
       <!-- 左侧欢迎区 -->
