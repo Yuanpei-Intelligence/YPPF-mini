@@ -12,7 +12,9 @@ import { http } from '@/http/http'
  * - signup_activities: 即将截止报名的活动，按截止时间正序，最多返回10条
  */
 export function getActivityOverview() {
-  return http.get<IActivityHomepage>('/api/v2/activity/overview/')
+  return http.get<IActivityHomepage>('/api/v2/activity/overview/', undefined, undefined, {
+    errorPresentation: 'manual',
+  })
 }
 
 /**
@@ -21,7 +23,9 @@ export function getActivityOverview() {
  * @returns 活动信息
  */
 export function getActivityInfo(id: number) {
-  return http.get<IActivitySummary>(`/api/v2/activity/${id}/`)
+  return http.get<IActivitySummary>(`/api/v2/activity/${id}/`, undefined, undefined, {
+    errorPresentation: 'manual',
+  })
 }
 
 /**
@@ -30,5 +34,11 @@ export function getActivityInfo(id: number) {
  * @returns 签到结果
  */
 export function checkInActivity(id: number) {
-  return http.post<ICheckInRes>(`/api/v2/activity/checkin/`, { aid: id })
+  return http.post<ICheckInRes>(
+    '/api/v2/activity/checkin/',
+    { aid: id },
+    undefined,
+    undefined,
+    { errorPresentation: 'manual' },
+  )
 }

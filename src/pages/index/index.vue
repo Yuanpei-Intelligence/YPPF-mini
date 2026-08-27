@@ -119,6 +119,7 @@ const { refresh } = usePageRefresh(
     }
     catch (error) {
       console.error('活动数据获取失败:', error)
+      handleApiException(error)
     }
     finally {
       activityLoading.value = false

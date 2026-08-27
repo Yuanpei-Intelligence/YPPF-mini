@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import type { IActivitySummary } from '@/api/types/activity'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { checkInActivity, getActivityInfo } from '@/api/activity'
+import { useApiException } from '@/hooks/useApiException'
 import { openWebview } from '@/utils'
 
 definePage({
@@ -15,6 +17,12 @@ const activity = ref<IActivitySummary | null>(null)
 const loading = ref(true)
 const checkIning = ref(false)
 const checkInSuccess = ref(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
+
+function hasValidActivityId() {
+  return Number.isInteger(activityId.value) && activityId.value > 0
+}
 
 // 格式化时间显示
 function formatDateTime(dateTimeStr: string) {
@@ -34,7 +42,7 @@ function formatDateTime(dateTimeStr: string) {
 }
 
 async function fetchActivityInfo() {
-  if (activityId.value === -1)
+  if (!hasValidActivityId())
     return
   loading.value = true
   try {
@@ -42,10 +50,7 @@ async function fetchActivityInfo() {
   }
   catch (error) {
     console.error(error)
-    uni.showToast({
-      title: '获取活动信息失败',
-      icon: 'error',
-    })
+    handleApiException(error)
   }
   finally {
     loading.value = false
@@ -53,8 +58,8 @@ async function fetchActivityInfo() {
 }
 
 async function handleCheckIn() {
-  if (activityId.value === -1) {
-    uni.showToast({ title: '参数错误', icon: 'none' })
+  if (!hasValidActivityId()) {
+    showMessage('活动参数错误。', 'warning')
     return
   }
   // 不允许点着玩
@@ -64,10 +69,7 @@ async function handleCheckIn() {
   try {
     const res = await checkInActivity(activityId.value)
     checkInSuccess.value = true
-    uni.showToast({
-      title: res.message || '签到成功',
-      icon: 'success',
-    })
+    showMessage(res.message || '签到成功。', 'success')
     // 展示详情
     // TODO: 改成原生的
     setTimeout(() => {
@@ -76,7 +78,7 @@ async function handleCheckIn() {
   }
   catch (error) {
     console.error(error)
-    // 错误信息由 http 包负责显示
+    handleApiException(error)
   }
   finally {
     checkIning.value = false
@@ -99,12 +101,16 @@ onLoad((options) => {
       activityId.value = Number(options.id)
     }
   }
-  if (activityId.value === -1) {
-    uni.showToast({ title: '参数错误', icon: 'error' })
+  if (!hasValidActivityId()) {
     loading.value = false
     return
   }
   fetchActivityInfo()
+})
+
+onReady(() => {
+  if (!hasValidActivityId())
+    showMessage('活动参数错误。', 'warning')
 })
 </script>
 
@@ -117,6 +123,7 @@ onLoad((options) => {
       left-icon="arrow-left"
       @left-click="goBack"
     />
+    <uv-toast ref="toastRef" />
 
     <!-- 加载状态 -->
     <view v-if="loading" class="flex items-center justify-center py-20">
@@ -167,14 +174,15 @@ onLoad((options) => {
 
     <!-- 签到按钮 -->
     <view v-if="activity && !loading" class="fixed bottom-0 left-0 right-0 bg-white px-4 py-4 pb-safe shadow-lg">
-      <button
-        class="w-full rounded-lg py-3 text-base font-medium"
-        :class="checkInSuccess ? 'bg-gray-300 text-gray-500' : (checkIning ? 'bg-gray-300 text-gray-500' : 'bg-blue-500 text-white')"
+      <uv-button
+        type="primary"
+        shape="circle"
+        :loading="checkIning"
         :disabled="checkIning || checkInSuccess"
         @click="handleCheckIn"
       >
         {{ checkInSuccess ? '已签到' : (checkIning ? '签到中...' : '签到') }}
-      </button>
+      </uv-button>
     </view>
 
     <!-- 底部占位 -->
@@ -182,10 +190,12 @@ onLoad((options) => {
 
     <!-- 参数错误或加载失败 -->
     <view v-else class="flex flex-col items-center justify-center py-20">
-      <text class="text-gray-400">{{ activityId === -1 ? '参数错误，无法签到' : '获取活动信息失败' }}</text>
-      <button class="mt-4 rounded-lg bg-blue-500 px-6 py-2 text-white" @click="activityId === -1 ? goBack() : fetchActivityInfo()">
-        {{ activityId === -1 ? '返回' : '重试' }}
-      </button>
+      <text class="text-gray-400">{{ !hasValidActivityId() ? '参数错误，无法签到' : '获取活动信息失败' }}</text>
+      <view class="mt-4 w-32">
+        <uv-button type="primary" shape="circle" @click="!hasValidActivityId() ? goBack() : fetchActivityInfo()">
+          {{ !hasValidActivityId() ? '返回' : '重试' }}
+        </uv-button>
+      </view>
     </view>
   </view>
 </template>
