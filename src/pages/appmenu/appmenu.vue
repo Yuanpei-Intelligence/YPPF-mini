@@ -19,6 +19,7 @@ const APP_LIST_PERSON = [
     name: '实用工具',
     apps: [
       { name: '反馈中心', icon: 'i-carbon-chat-bot', color: 'text-green-500', url: '/pages/appmenu/feedback/feedback' },
+      { name: '生日灯牌', icon: 'i-my-icons-birthboard', color: 'text-amber-500', uri: '/birthboard/' },
       { name: '元气值商城', icon: 'i-carbon-store', color: 'text-blue-500', url: '/pages/appmenu/YQpools' },
       { name: '住宿调研', icon: 'i-carbon-document-tasks', color: 'text-orange-500', uri: '/dormitory/routine-QA/' },
       { name: '宿舍分配', icon: 'i-carbon-catalog', color: 'text-purple-500', uri: '/dormitory/assign-result/' },
@@ -49,6 +50,7 @@ const APP_LIST_ORG = [
     name: '实用工具',
     apps: [
       { name: '反馈中心', icon: 'i-carbon-chat-bot', color: 'text-green-500', url: '/pages/appmenu/feedback/feedback' },
+      { name: '生日灯牌', icon: 'i-my-icons-birthboard', color: 'text-amber-500', uri: '/birthboard/' },
       { name: '旧版预约', icon: 'i-carbon-calendar', color: 'text-pink-600', uri: '/underground' },
     ],
   },

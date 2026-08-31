@@ -85,8 +85,13 @@ async function onCarouselClick(index: number) {
     await openWebview({ uri: item.redirect_url })
     // #endif
   }
-  else {
+  else if (item.redirect_url.startsWith('/pages/')) {
+    // 小程序页面路由
     uni.navigateTo({ url: item.redirect_url })
+  }
+  else {
+    // 后端相对路径（如 /birthboard/、/stuinfo 等），通过 webview 打开
+    await openWebview({ uri: item.redirect_url })
   }
 }
 
