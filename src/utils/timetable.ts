@@ -1,4 +1,4 @@
-import type { CalendarKind, LessonBlock, Occurrence, OccurrenceKind, Term, WeekDay, WeekView } from '@/api/types/timetable'
+import type { CalendarEvent, CalendarKind, LessonBlock, Occurrence, OccurrenceKind, Term, WeekDay, WeekView } from '@/api/types/timetable'
 
 // @unocss-include
 // 上面这行让 UnoCSS 扫描本文件：这里的校历配色表以字符串形式返回 class（.ts 默认不在扫描范围内）。
@@ -199,11 +199,9 @@ export function describeSlot(slot: SlotLike): string {
   const head: string[] = []
   if (slot.weekday)
     head.push(`周${WEEKDAY_LABELS[slot.weekday - 1] ?? '?'}`)
-  if (slot.start_section && slot.end_section) {
-    head.push(slot.start_section === slot.end_section
-      ? `第${slot.start_section}节`
-      : `第${slot.start_section}–${slot.end_section}节`)
-  }
+  const sections = describeSections(slot.start_section, slot.end_section)
+  if (sections)
+    head.push(sections)
   const weeks = slot.week_start && slot.week_end
     ? `第${slot.week_start}–${slot.week_end}周${slot.parity ? PARITY_LABELS[slot.parity] : ''}`
     : ''
@@ -277,6 +275,200 @@ export function weekSuspendedReason(view: WeekView | null | undefined): string {
       reasons.push(reason)
   }
   return reasons.join(' · ')
+}
+
+/* -------------------- 日期与学期定位 -------------------- */
+
+const DAY_MS = 86_400_000
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** `YYYY-MM-DD` -> UTC 零点的时间戳（全部按 UTC 计算，避开时区与夏令时）；格式或日期无效时返回 null */
+function isoDateToMs(iso: string): number | null {
+  if (!ISO_DATE_RE.test(iso))
+    return null
+  const [year, month, day] = iso.split('-').map(Number)
+  const ms = Date.UTC(year, month - 1, day)
+  const check = new Date(ms)
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day)
+    return null
+  return ms
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function msToIsoDate(ms: number): string {
+  const date = new Date(ms)
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`
+}
+
+/** 是否为合法的 `YYYY-MM-DD` */
+export function isIsoDate(value: unknown): value is string {
+  return typeof value === 'string' && isoDateToMs(value) !== null
+}
+
+/** 本机今天的 `YYYY-MM-DD` */
+export function todayIso(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
+}
+
+/** `YYYY-MM-DD` 加减天数；输入无效时原样返回 */
+export function addDays(iso: string, delta: number): string {
+  const ms = isoDateToMs(iso)
+  return ms === null ? iso : msToIsoDate(ms + delta * DAY_MS)
+}
+
+/** 相差天数（to − from）；任一无效时返回 null */
+export function daysBetween(from: string, to: string): number | null {
+  const start = isoDateToMs(from)
+  const end = isoDateToMs(to)
+  if (start === null || end === null)
+    return null
+  return Math.round((end - start) / DAY_MS)
+}
+
+/** 周几：1=周一 … 7=周日；输入无效时返回 0 */
+export function weekdayOf(iso: string): number {
+  const ms = isoDateToMs(iso)
+  if (ms === null)
+    return 0
+  const day = new Date(ms).getUTCDay()
+  return day === 0 ? 7 : day
+}
+
+/** 某天在学期里的教学周次；不在 [week1_monday, week1_monday + total_weeks×7) 内为 null */
+export function weekOfDate(term: Term, iso: string): number | null {
+  const diff = daysBetween(term.week1_monday, iso)
+  if (diff === null || diff < 0)
+    return null
+  const week = Math.floor(diff / 7) + 1
+  return week <= term.total_weeks ? week : null
+}
+
+/** 某天落在学期列表里的哪个学期、第几周；都不命中为 null。preferred 为优先判断的学期码 */
+export function locateDate(terms: Term[], iso: string, preferred?: string): { term: Term, week: number } | null {
+  const ordered = preferred
+    ? [...terms.filter(term => term.code === preferred), ...terms.filter(term => term.code !== preferred)]
+    : terms
+  for (const term of ordered) {
+    const week = weekOfDate(term, iso)
+    if (week !== null)
+      return { term, week }
+  }
+  return null
+}
+
+/** 第 week 周周一到周日的 ISO 日期 */
+export function weekDatesOf(term: Term, week: number): string[] {
+  const monday = addDays(term.week1_monday, (week - 1) * 7)
+  return WEEKDAY_LABELS.map((_, index) => addDays(monday, index))
+}
+
+/** 校历事件与闭区间 [start, end] 是否重叠（ISO 日期可直接按字符串比较） */
+function eventOverlaps(event: CalendarEvent, start: string, end: string): boolean {
+  return event.start <= end && event.end >= start
+}
+
+/** 校历事件优先级：放假 / 考试 > 调休 > 仅标注（与后端 day_info 一致） */
+const CALENDAR_PRIORITY: Record<CalendarKind, number> = { holiday: 3, exam: 3, swap: 2, info: 1 }
+
+/**
+ * 某天的校历信息：优先用 week/ 返回的 days，否则从学期校历推算；
+ * 没有事件时 kind 与 label 为 null；日期无效时返回 null
+ */
+export function dayInfoOf(view: WeekView | null | undefined, iso: string): WeekDay | null {
+  const fromDays = view?.days?.find(day => day.date === iso)
+  if (fromDays)
+    return fromDays
+  const weekday = weekdayOf(iso)
+  if (!weekday)
+    return null
+  let best: CalendarEvent | null = null
+  for (const event of view?.term.calendar ?? []) {
+    if (!eventOverlaps(event, iso, iso))
+      continue
+    if (!best || CALENDAR_PRIORITY[event.kind] > CALENDAR_PRIORITY[best.kind])
+      best = event
+  }
+  return {
+    date: iso,
+    weekday,
+    kind: best?.kind ?? null,
+    label: best?.name ?? null,
+    follows_weekday: best?.follows_weekday ?? null,
+  }
+}
+
+export interface WeekPickerItem {
+  week: number
+  /** `M/D–M/D` */
+  range: string
+  /** 本周内的停课事件名（放假 / 考试周），多个用 · 连接；没有则为空串 */
+  suspended: string
+}
+
+/** 周次选择器：学期内每一周的日期范围与停课标记 */
+export function weekPickerItems(term: Term): WeekPickerItem[] {
+  const suspendedEvents = (term.calendar ?? []).filter(event => suspendsClasses(event.kind))
+  const items: WeekPickerItem[] = []
+  for (let week = 1; week <= term.total_weeks; week++) {
+    const dates = weekDatesOf(term, week)
+    const names = suspendedEvents
+      .filter(event => eventOverlaps(event, dates[0], dates[6]))
+      .map(event => event.name)
+    items.push({
+      week,
+      range: `${shortDate(dates[0])}–${shortDate(dates[6])}`,
+      suspended: Array.from(new Set(names)).join(' · '),
+    })
+  }
+  return items
+}
+
+/* -------------------- 日程详情 -------------------- */
+
+/** `第3节` / `第3–4节`；缺节次时为空串 */
+export function describeSections(start: number | null | undefined, end: number | null | undefined): string {
+  if (!start || !end)
+    return ''
+  return start === end ? `第${start}节` : `第${start}–${end}节`
+}
+
+/** 详情里的时间行：`9月25日 周五 · 10:10–12:00 · 第3–4节` */
+export function describeOccurrenceTime(item: Occurrence): string {
+  const parts = [
+    `${chineseDate(item.date)} 周${WEEKDAY_LABELS[item.weekday - 1] ?? ''}`,
+    `${clockOf(item.start)}–${clockOf(item.end)}`,
+  ]
+  const sections = describeSections(item.start_section, item.end_section)
+  if (sections)
+    parts.push(sections)
+  return parts.join(' · ')
+}
+
+export type DetailActionKey = 'activity' | 'appoint' | 'edit' | 'hide' | 'unhide'
+
+export interface DetailAction {
+  key: DetailActionKey
+  label: string
+  primary: boolean
+}
+
+/** 详情弹层的操作：书院课 / 活动 → 查看活动，预约 → 查看预约，自定义 → 编辑；任何日程都可隐藏 / 取消隐藏 */
+export function detailActionsFor(item: Occurrence, hidden: boolean): DetailAction[] {
+  const actions: DetailAction[] = []
+  if (item.kind === 'college' || item.kind === 'activity')
+    actions.push({ key: 'activity', label: '查看活动 / 签到', primary: true })
+  else if (item.kind === 'appoint')
+    actions.push({ key: 'appoint', label: '查看预约', primary: true })
+  else if (item.kind === 'custom')
+    actions.push({ key: 'edit', label: '编辑', primary: true })
+  actions.push(hidden
+    ? { key: 'unhide', label: '取消隐藏', primary: false }
+    : { key: 'hide', label: '隐藏', primary: false })
+  return actions
 }
 
 /* -------------------- 本机存储 -------------------- */

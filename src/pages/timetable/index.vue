@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import type { Occurrence, WeekView } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
-import type { PaletteColor } from '@/utils/timetable'
+import type { DetailAction, DetailActionKey, PaletteColor, WeekPickerItem } from '@/utils/timetable'
 import { onLoad, onPullDownRefresh, onShareAppMessage, onShow } from '@dcloudio/uni-app'
 import { computed, ref } from 'vue'
 import { getWeek, listEntries, updateEntry } from '@/api/timetable'
@@ -13,10 +13,10 @@ import {
   cacheWeekView,
   CALENDAR_SHADE_CLASS,
   calendarLabelClass,
-  chineseDate,
-  clockOf,
   colorForOccurrence,
   dayInfo,
+  describeOccurrenceTime,
+  detailActionsFor,
   KIND_BADGES,
   KIND_LABELS,
   occurrenceRowSpan,
@@ -29,6 +29,7 @@ import {
   STATUS_LABELS,
   suspendsClasses,
   WEEKDAY_LABELS,
+  weekPickerItems,
   weekSuspendedReason,
 } from '@/utils/timetable'
 
@@ -71,12 +72,11 @@ interface DayColumn {
   suspended: boolean
 }
 
-type DetailActionKey = 'activity' | 'appoint' | 'edit' | 'hide' | 'unhide'
-
-interface DetailAction {
-  key: DetailActionKey
-  label: string
-  primary: boolean
+/** 周次选择器里的一格 */
+interface WeekCell extends WeekPickerItem {
+  cellClass: string
+  rangeClass: string
+  markClass: string
 }
 
 const view = ref<WeekView | null>(null)
@@ -90,6 +90,7 @@ const showHidden = ref(readShowHidden())
 const localHiddenIds = ref<string[]>(readLocalHiddenIds())
 const detail = ref<Occurrence | null>(null)
 const detailPopup = ref<PopupInstance | null>(null)
+const weekPickerPopup = ref<PopupInstance | null>(null)
 const hiding = ref(false)
 const { syncing, syncPortal } = useTimetableSync()
 const { resubscribeSilently } = useClassReminder()
@@ -191,6 +192,27 @@ function columnStyle(index: number) {
   return `left: ${(index * COLUMN_WIDTH).toFixed(3)}%; width: ${COLUMN_WIDTH.toFixed(3)}%`
 }
 
+/** 周次选择器：本周蓝底，正在显示的周描边，停课周标红 */
+const weekCells = computed<WeekCell[]>(() => {
+  const current = view.value?.today.week ?? null
+  const shown = view.value?.week ?? null
+  return (term.value ? weekPickerItems(term.value) : []).map((item) => {
+    const isCurrent = item.week === current
+    const isShown = item.week === shown
+    let cellClass = 'border-gray-100 bg-gray-50 text-gray-800'
+    if (isCurrent)
+      cellClass = isShown ? 'border-blue-300 bg-blue-600 text-white' : 'border-blue-600 bg-blue-600 text-white'
+    else if (isShown)
+      cellClass = 'border-blue-500 bg-blue-50 text-blue-700'
+    return {
+      ...item,
+      cellClass,
+      rangeClass: isCurrent ? 'text-blue-100' : 'text-gray-400',
+      markClass: isCurrent ? 'text-red-200' : 'text-red-500',
+    }
+  })
+})
+
 let requestSeq = 0
 
 async function loadWeek(target: { term: string, week: number } | null, options: { silent?: boolean } = {}) {
@@ -257,6 +279,33 @@ function goCurrentWeek() {
   void loadWeek(null)
 }
 
+function openWeekPicker() {
+  if (!view.value)
+    return
+  weekPickerPopup.value?.open()
+}
+
+function pickWeek(week: number) {
+  weekPickerPopup.value?.close()
+  if (!view.value || week === view.value.week)
+    return
+  if (week === view.value.today.week) {
+    // 回到本周时不记录选择，刷新后继续跟随服务端的当前周
+    goCurrentWeek()
+    return
+  }
+  selected.value = { term: view.value.term.code, week }
+  void loadWeek(selected.value)
+}
+
+/** 点表头日期进入当天的日视图 */
+function goDay(index: number) {
+  const iso = weekDates.value[index]
+  if (!iso || !view.value)
+    return
+  uni.navigateTo({ url: `/pages/timetable/day?date=${iso}&term=${encodeURIComponent(view.value.term.code)}` })
+}
+
 async function handleSync() {
   if (syncing.value)
     return
@@ -281,39 +330,12 @@ async function handleSync() {
 }
 
 const detailColor = computed(() => (detail.value ? colorForOccurrence(detail.value) : null))
-const detailTime = computed(() => {
-  const item = detail.value
-  if (!item)
-    return ''
-  const parts = [
-    `${chineseDate(item.date)} 周${WEEKDAY_LABELS[item.weekday - 1] ?? ''}`,
-    `${clockOf(item.start)}–${clockOf(item.end)}`,
-  ]
-  if (item.start_section && item.end_section) {
-    parts.push(item.start_section === item.end_section
-      ? `第${item.start_section}节`
-      : `第${item.start_section}–${item.end_section}节`)
-  }
-  return parts.join(' · ')
-})
+const detailTime = computed(() => (detail.value ? describeOccurrenceTime(detail.value) : ''))
 const detailStatus = computed(() => (detail.value ? STATUS_LABELS[detail.value.status] ?? '' : ''))
 const detailHidden = computed(() => !!detail.value && isHidden(detail.value))
-const detailActions = computed<DetailAction[]>(() => {
-  const item = detail.value
-  if (!item)
-    return []
-  const actions: DetailAction[] = []
-  if (item.kind === 'college' || item.kind === 'activity')
-    actions.push({ key: 'activity', label: '查看活动 / 签到', primary: true })
-  else if (item.kind === 'appoint')
-    actions.push({ key: 'appoint', label: '查看预约', primary: true })
-  else if (item.kind === 'custom')
-    actions.push({ key: 'edit', label: '编辑', primary: true })
-  actions.push(detailHidden.value
-    ? { key: 'unhide', label: '取消隐藏', primary: false }
-    : { key: 'hide', label: '隐藏', primary: false })
-  return actions
-})
+const detailActions = computed<DetailAction[]>(() =>
+  (detail.value ? detailActionsFor(detail.value, detailHidden.value) : []),
+)
 
 function openDetail(occurrence: Occurrence) {
   detail.value = occurrence
@@ -467,8 +489,12 @@ onShareAppMessage(() => ({
           >
             <view class="i-carbon-chevron-left text-lg text-gray-600" />
           </view>
-          <view class="min-w-14 text-center text-sm text-gray-800 font-bold" @click="goCurrentWeek">
-            {{ view ? `第 ${view.week} 周` : '—' }}
+          <view
+            class="min-w-14 flex items-center justify-center text-sm text-gray-800 font-bold active:opacity-60"
+            @click="openWeekPicker"
+          >
+            <text>{{ view ? `第 ${view.week} 周` : '—' }}</text>
+            <view v-if="view" class="i-carbon-chevron-down ml-0.5 text-xs text-gray-400" />
           </view>
           <view
             class="rounded-full p-1.5 active:bg-gray-100"
@@ -515,8 +541,9 @@ onShareAppMessage(() => ({
         <view
           v-for="(day, index) in dayColumns"
           :key="index"
-          class="flex-1 py-1 text-center"
+          class="flex-1 py-1 text-center active:bg-gray-100"
           :class="day.today ? 'bg-blue-50' : day.suspended ? CALENDAR_SHADE_CLASS : ''"
+          @click="goDay(index)"
         >
           <text class="block text-xs" :class="day.today ? 'text-blue-600 font-bold' : 'text-gray-600'">
             周{{ day.weekday }}
@@ -679,9 +706,63 @@ onShareAppMessage(() => ({
       </view>
     </view>
   </uv-popup>
+
+  <!-- 周次选择 -->
+  <uv-popup ref="weekPickerPopup" mode="bottom" :round="16" :safe-area-inset-bottom="true">
+    <view v-if="view" class="px-4 pb-4 pt-5">
+      <view class="flex items-center justify-between gap-2">
+        <view class="min-w-0 flex-1">
+          <text class="block text-base text-gray-900 font-bold">选择周次</text>
+          <text class="block truncate text-xs text-gray-400">{{ view.term.name }} · 共 {{ view.term.total_weeks }} 周</text>
+        </view>
+        <view
+          v-if="view.today.week"
+          class="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-600 active:bg-blue-100"
+          @click="pickWeek(view.today.week)"
+        >
+          回到本周
+        </view>
+      </view>
+      <scroll-view scroll-y class="week-picker mt-3">
+        <view class="flex flex-wrap -mx-1">
+          <view v-for="cell in weekCells" :key="cell.week" class="w-1/4 px-1 pb-2">
+            <view
+              class="relative border-2 rounded-xl px-1 py-2 text-center"
+              :class="cell.cellClass"
+              @click="pickWeek(cell.week)"
+            >
+              <text class="block text-sm font-medium">第 {{ cell.week }} 周</text>
+              <text class="block text-3xs" :class="cell.rangeClass">{{ cell.range }}</text>
+              <!-- 停课标签行常驻占位，每格高度一致 -->
+              <text class="block min-h-26rpx truncate text-3xs" :class="cell.markClass">{{ cell.suspended }}</text>
+              <view v-if="cell.suspended" class="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-red-500" />
+            </view>
+          </view>
+        </view>
+      </scroll-view>
+      <view class="mt-1 flex items-center gap-4 text-2xs text-gray-400">
+        <view class="flex items-center gap-1">
+          <view class="h-2.5 w-2.5 rounded-sm bg-blue-600" />
+          <text>本周</text>
+        </view>
+        <view class="flex items-center gap-1">
+          <view class="h-2.5 w-2.5 border-2 border-blue-500 rounded-sm" />
+          <text>正在显示</text>
+        </view>
+        <view class="flex items-center gap-1">
+          <view class="h-1.5 w-1.5 rounded-full bg-red-500" />
+          <text>放假 / 考试</text>
+        </view>
+      </view>
+    </view>
+  </uv-popup>
 </template>
 
 <style lang="scss" scoped>
+.week-picker {
+  max-height: 60vh;
+}
+
 .grid-block {
   padding: 4rpx 6rpx;
 }

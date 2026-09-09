@@ -38,7 +38,7 @@ definePage({
   },
 })
 
-type ToggleKey = 'show_college' | 'show_activities' | 'show_appointments' | 'share_show_name'
+type ToggleKey = 'show_courses' | 'show_college' | 'show_activities' | 'show_appointments' | 'share_show_name'
 
 interface PickerEvent {
   detail: { value: number | string }
@@ -103,7 +103,9 @@ const { templateId: reminderTemplateId, ensureTemplateId, rememberEnabled, subsc
 const reminderSaving = ref(false)
 const reminderHint = ref('')
 
+/** 前四个是日程来源开关，周视图、首页日程和日历订阅一并生效 */
 const toggles: { key: ToggleKey, label: string, desc: string }[] = [
+  { key: 'show_courses', label: '显示学校课表', desc: '门户导入、粘贴导入和手动添加的课程' },
   { key: 'show_college', label: '显示书院课', desc: '已选中的书院课程' },
   { key: 'show_activities', label: '显示活动', desc: '已报名的活动' },
   { key: 'show_appointments', label: '显示地下室预约', desc: '我的地下室预约' },
@@ -831,7 +833,7 @@ onLoad((options) => {
         <view class="mt-2 border-t border-gray-100 pt-3">
           <text class="block text-sm text-gray-700">日历订阅</text>
           <text class="mt-1 block text-xs text-gray-400 leading-5">
-            把订阅链接添加到系统日历（iOS 日历、Outlook、Google 日历等），课表变动会自动更新。链接含私人 token，请勿转发。
+            把订阅链接添加到系统日历（iOS 日历、Outlook、Google 日历等），课表变动会自动更新。订阅内容跟随上面四个来源开关（学校课表 / 书院课 / 活动 / 地下室预约）。链接含私人 token，请勿转发。
           </text>
           <view class="mt-3 flex gap-3">
             <button

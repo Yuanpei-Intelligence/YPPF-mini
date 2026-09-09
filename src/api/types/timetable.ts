@@ -163,6 +163,8 @@ export interface ImportOut {
 export interface Settings {
   reminder_enabled: boolean
   reminder_minutes: number
+  /** 四个来源开关，周视图 / 日程 / ICS 订阅一并生效：学校课表（门户 / 粘贴 / 手动条目） */
+  show_courses: boolean
   show_college: boolean
   show_activities: boolean
   show_appointments: boolean
