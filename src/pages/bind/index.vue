@@ -7,7 +7,7 @@ import ApiFieldError from '@/components/ApiFieldError.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
-import { openWebview } from '@/utils'
+import { openWebview } from '@/utils/webview'
 
 definePage({
   style: {

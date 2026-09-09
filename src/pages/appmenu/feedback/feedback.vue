@@ -13,7 +13,7 @@ import {
 } from '@/api/feedback'
 import { useApiException } from '@/hooks/useApiException'
 import { useUserStore } from '@/store/user'
-import { openWebview } from '@/utils'
+import { openWebview } from '@/utils/webview'
 
 definePage({
   style: {

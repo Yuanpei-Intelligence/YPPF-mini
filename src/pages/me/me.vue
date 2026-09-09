@@ -9,7 +9,8 @@ import { usePageRefresh } from '@/hooks/usePageRefresh'
 import { BIND_PAGE, LOGIN_PAGE } from '@/router/config'
 import { useUserStore } from '@/store'
 import { useTokenStore } from '@/store/token'
-import { openWebview, toBackendURL } from '@/utils'
+import { toBackendURL } from '@/utils'
+import { openWebview } from '@/utils/webview'
 
 definePage({
   style: {

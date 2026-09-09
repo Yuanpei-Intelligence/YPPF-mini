@@ -9,7 +9,8 @@ import { everydaySignIn, getUserMe } from '@/api/login'
 import ActivityCard from '@/components/ActivityCard.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
-import { openWebview, toBackendURL } from '@/utils'
+import { toBackendURL } from '@/utils'
+import { openWebview } from '@/utils/webview'
 
 defineOptions({
   name: 'Home',
@@ -158,7 +159,7 @@ onMounted(async () => {
 })
 
 function onActivityCardClick(id: number) {
-  void openWebview({ uri: `/viewActivity/${id}` })
+  uni.navigateTo({ url: `/pages/activity/detail?id=${id}` })
 }
 </script>
 
