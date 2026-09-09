@@ -61,8 +61,9 @@ function parseFieldErrors(value: unknown): ApiFieldErrors | null {
   const result: ApiFieldErrors = {}
   for (const [field, items] of Object.entries(value)) {
     const parsed = parseFieldErrorItems(items)
+    // 形状未知的字段值（如嵌套对象）跳过该字段即可，不要让整个 {code, message} 信封解析失败
     if (parsed === null)
-      return null
+      continue
     result[field] = parsed
   }
   return result

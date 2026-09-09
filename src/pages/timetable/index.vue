@@ -303,7 +303,7 @@ function goDay(index: number) {
   const iso = weekDates.value[index]
   if (!iso || !view.value)
     return
-  uni.navigateTo({ url: `/pages/timetable/day?date=${iso}&term=${encodeURIComponent(view.value.term.code)}` })
+  uni.navigateTo({ url: `/pages/timetable/day?date=${encodeURIComponent(iso)}&term=${encodeURIComponent(view.value.term.code)}` })
 }
 
 async function handleSync() {
