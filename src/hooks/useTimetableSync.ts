@@ -1,9 +1,8 @@
 import type { ImportOut } from '@/api/types/timetable'
-import type { ApiErrorInfo } from '@/http/error'
 import { ref } from 'vue'
 import { getBinding } from '@/api/pku'
 import { importPortal } from '@/api/timetable'
-import { getApiError } from '@/http/error'
+import { RequestError, toRequestError } from '@/http/errors'
 import { clearPkuCredential, readPkuCredential } from '@/utils/timetable'
 
 /**
@@ -12,7 +11,7 @@ import { clearPkuCredential, readPkuCredential } from '@/utils/timetable'
  */
 async function consentStillGranted(): Promise<boolean> {
   try {
-    const binding = await getBinding({ hideErrorToast: true })
+    const binding = await getBinding()
     return binding.bound && binding.consents.timetable
   }
   catch {
@@ -23,8 +22,8 @@ async function consentStillGranted(): Promise<boolean> {
 /** 同步结果；login_required 表示需要用户重新登录门户，retried 表示已用本机记住的密码重试过但失败 */
 export type PortalSyncResult
   = | { status: 'ok', result: ImportOut }
-    | { status: 'login_required', error: ApiErrorInfo, retried: boolean }
-    | { status: 'error', error: ApiErrorInfo }
+    | { status: 'login_required', error: RequestError, retried: boolean }
+    | { status: 'error', error: RequestError }
 
 /**
  * 门户课表同步：先用服务端保存的会话抓取；遇到 409 PKU_LOGIN_REQUIRED 且本机记住了密码时，
@@ -34,16 +33,20 @@ export function useTimetableSync() {
   const syncing = ref(false)
 
   async function syncPortal(term?: string): Promise<PortalSyncResult> {
-    if (syncing.value)
-      return { status: 'error', error: { statusCode: null, code: 'busy', message: '正在同步中，请稍候', fieldErrors: {} } }
+    if (syncing.value) {
+      return {
+        status: 'error',
+        error: new RequestError({ kind: 'unknown', code: 'busy', message: '正在同步中，请稍候' }),
+      }
+    }
     syncing.value = true
     try {
       try {
-        const result = await importPortal({ term }, { hideErrorToast: true })
+        const result = await importPortal({ term })
         return { status: 'ok', result }
       }
       catch (error) {
-        const info = getApiError(error, '同步失败')
+        const info = toRequestError(error)
         if (info.statusCode !== 409 || info.code !== 'PKU_LOGIN_REQUIRED')
           return { status: 'error', error: info }
 
@@ -60,11 +63,11 @@ export function useTimetableSync() {
             username: credential.username,
             password: credential.password,
             consent_timetable: true,
-          }, { hideErrorToast: true })
+          })
           return { status: 'ok', result }
         }
         catch (retryError) {
-          const retryInfo = getApiError(retryError, '门户登录失败')
+          const retryInfo = toRequestError(retryError)
           // 密码错误说明记住的密码已失效：清掉，免得之后每次同步都拿错密码重试
           if (retryInfo.statusCode === 400 && retryInfo.code === 'IAAA_ERROR')
             clearPkuCredential()

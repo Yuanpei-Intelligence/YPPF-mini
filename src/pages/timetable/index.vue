@@ -1,12 +1,13 @@
 <script lang="ts" setup>
 import type { Occurrence, WeekView } from '@/api/types/timetable'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import type { PaletteColor } from '@/utils/timetable'
 import { onLoad, onPullDownRefresh, onShareAppMessage, onShow } from '@dcloudio/uni-app'
 import { computed, ref } from 'vue'
 import { getWeek, listEntries, updateEntry } from '@/api/timetable'
+import { useApiException } from '@/hooks/useApiException'
 import { useClassReminder } from '@/hooks/useClassReminder'
 import { useTimetableSync } from '@/hooks/useTimetableSync'
-import { getApiError } from '@/http/error'
 import { confirmModal } from '@/utils/dialog'
 import {
   cacheWeekView,
@@ -92,6 +93,8 @@ const detailPopup = ref<PopupInstance | null>(null)
 const hiding = ref(false)
 const { syncing, syncPortal } = useTimetableSync()
 const { resubscribeSilently } = useClassReminder()
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 
 const term = computed(() => view.value?.term ?? null)
 const rows = computed(() => sectionRows(term.value))
@@ -196,7 +199,7 @@ async function loadWeek(target: { term: string, week: number } | null, options: 
   if (!options.silent)
     loadError.value = ''
   try {
-    const data = await getWeek(target ?? undefined, { hideErrorToast: true })
+    const data = await getWeek(target ?? undefined)
     if (seq !== requestSeq)
       return
     view.value = data
@@ -212,11 +215,10 @@ async function loadWeek(target: { term: string, week: number } | null, options: 
   catch (error) {
     if (seq !== requestSeq)
       return
-    const info = getApiError(error, '课表加载失败')
-    if (view.value)
-      uni.showToast({ title: info.message, icon: 'none' })
-    else
-      loadError.value = info.message
+    // 已有数据（含本机缓存）时只 toast，首屏失败才整页报错
+    const requestError = handleApiException(error, { showToast: !!view.value })
+    if (!view.value)
+      loadError.value = requestError.message
   }
   finally {
     if (seq === requestSeq)
@@ -226,7 +228,7 @@ async function loadWeek(target: { term: string, week: number } | null, options: 
 
 async function checkTermEntries(termCode: string) {
   try {
-    const entries = await listEntries({ term: termCode }, { hideErrorToast: true })
+    const entries = await listEntries({ term: termCode })
     termHasEntries.value = entries.length > 0
   }
   catch {
@@ -260,17 +262,22 @@ async function handleSync() {
     return
   const outcome = await syncPortal(view.value?.term.code)
   if (outcome.status === 'ok') {
-    uni.showToast({ title: `已同步 ${outcome.result.total} 门课程`, icon: 'success' })
+    showMessage(`已同步 ${outcome.result.total} 门课程`, 'success')
     void refresh()
     return
   }
   if (outcome.status === 'login_required') {
-    if (outcome.retried)
-      uni.showToast({ title: outcome.error.message, icon: 'none' })
-    uni.navigateTo({ url: '/pages/timetable/import' })
+    if (outcome.retried) {
+      // 记住的密码重试失败：先让用户看到原因，再转到导入页重新登录（页内 toast 会被新页面盖住）
+      handleApiException(outcome.error)
+      setTimeout(() => uni.navigateTo({ url: '/pages/timetable/import' }), 1500)
+    }
+    else {
+      uni.navigateTo({ url: '/pages/timetable/import' })
+    }
     return
   }
-  uni.showToast({ title: outcome.error.message, icon: 'none' })
+  handleApiException(outcome.error)
 }
 
 const detailColor = computed(() => (detail.value ? colorForOccurrence(detail.value) : null))
@@ -333,7 +340,7 @@ async function setHidden(item: Occurrence, hidden: boolean) {
   hiding.value = true
   try {
     if (typeof entryId === 'number') {
-      // 有存储条目的日程由服务端记录隐藏状态；失败提示由请求层统一显示
+      // 有存储条目的日程由服务端记录隐藏状态
       await updateEntry(entryId, { hidden })
     }
     else {
@@ -345,7 +352,7 @@ async function setHidden(item: Occurrence, hidden: boolean) {
     }
   }
   catch (error) {
-    console.error('更新隐藏状态失败:', error)
+    handleApiException(error)
     return
   }
   finally {
@@ -367,7 +374,7 @@ async function handleDetailAction(action: DetailActionKey) {
         uni.navigateTo({ url: `/pages/activity/detail?id=${activityId}` })
       }
       else {
-        uni.showToast({ title: '本周活动尚未发布', icon: 'none' })
+        showMessage('本周活动尚未发布', 'warning')
       }
       return
     }
@@ -378,7 +385,7 @@ async function handleDetailAction(action: DetailActionKey) {
     case 'edit': {
       const entryId = item.ref.entry_id
       if (typeof entryId !== 'number' || !view.value) {
-        uni.showToast({ title: '该日程无法编辑', icon: 'none' })
+        showMessage('该日程无法编辑', 'warning')
         return
       }
       closeDetail()
@@ -442,6 +449,7 @@ onShareAppMessage(() => ({
 
 <template>
   <view class="min-h-screen bg-gray-50 pb-24">
+    <uv-toast ref="toastRef" />
     <!-- 学期 + 周切换 -->
     <view class="sticky top-0 z-10 bg-white px-3 py-2 shadow-sm">
       <view class="flex items-center justify-between gap-2">

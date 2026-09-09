@@ -1,9 +1,10 @@
 <script lang="ts" setup>
 import type { Binding } from '@/api/types/pku'
 import type { IcsOut, ImportOut, Settings, Term, TextDryRunOut, TextFormat } from '@/api/types/timetable'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import type { SubscribeOutcome } from '@/hooks/useClassReminder'
 import { onLoad } from '@dcloudio/uni-app'
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { getBinding, pkuUnbind, updateConsents } from '@/api/pku'
 import {
   getIcsUrl,
@@ -14,9 +15,10 @@ import {
   rotateIcsUrl,
   updateSettings,
 } from '@/api/timetable'
+import ApiFieldError from '@/components/ApiFieldError.vue'
+import { useApiException } from '@/hooks/useApiException'
 import { useClassReminder } from '@/hooks/useClassReminder'
 import { useTimetableSync } from '@/hooks/useTimetableSync'
-import { getApiError } from '@/http/error'
 import { confirmModal } from '@/utils/dialog'
 import {
   clearPkuCredential,
@@ -48,6 +50,14 @@ const selectedTerm = ref('')
 const settings = ref<Settings | null>(null)
 const loading = ref(true)
 const loadError = ref('')
+const toastRef = ref<UvToastInstance | null>(null)
+const {
+  clearFieldError,
+  clearFieldErrors,
+  getFieldMessages,
+  handleApiException,
+  showMessage,
+} = useApiException(toastRef)
 let scrollToSettings = false
 
 // 北大账号
@@ -70,6 +80,16 @@ const dryRun = ref<TextDryRunOut | null>(null)
 const pasteImporting = ref(false)
 const pasteResult = ref<ImportOut | null>(null)
 const pasteError = ref('')
+
+// 字段一改就清掉它的后端错误提示
+watch(username, () => clearFieldError('username'))
+watch(password, () => clearFieldError('password'))
+watch(pasteText, () => clearFieldError('text'))
+
+/** 登录表单里会显示在控件旁的后端字段错误；一个都没有时退回整体 message，避免错误被吞掉 */
+function hasLoginFieldErrors() {
+  return ['username', 'password', 'non_field_errors'].some(field => getFieldMessages(field).length > 0)
+}
 
 // 设置
 const savingKeys = ref<Record<string, boolean>>({})
@@ -142,9 +162,9 @@ async function load() {
   loadError.value = ''
   try {
     const [bindingData, termsData, settingsData] = await Promise.all([
-      getBinding({ hideErrorToast: true }),
-      getTerms({ hideErrorToast: true }),
-      getSettings({ hideErrorToast: true }),
+      getBinding(),
+      getTerms(),
+      getSettings(),
     ])
     binding.value = bindingData
     terms.value = termsData.terms
@@ -158,7 +178,7 @@ async function load() {
       username.value = bindingData.pku_username || readPkuCredential()?.username || ''
   }
   catch (error) {
-    loadError.value = getApiError(error, '加载失败').message
+    loadError.value = handleApiException(error, { showToast: false }).message
   }
   finally {
     loading.value = false
@@ -172,9 +192,10 @@ async function load() {
 
 async function reloadBinding() {
   try {
-    binding.value = await getBinding({ hideErrorToast: true })
+    binding.value = await getBinding()
   }
   catch (error) {
+    // 操作本身已成功并提示过；绑定状态刷新失败只记日志，下次进入页面会重新加载
     console.error('刷新绑定状态失败:', error)
   }
 }
@@ -184,6 +205,7 @@ async function handleLoginImport() {
     return
   const user = username.value.trim()
   const pass = password.value
+  clearFieldErrors()
   if (!user || !pass) {
     formError.value = '请输入学号和密码'
     return
@@ -200,7 +222,7 @@ async function handleLoginImport() {
       username: user,
       password: pass,
       consent_timetable: true,
-    }, { hideErrorToast: true })
+    })
     if (remember.value)
       savePkuCredential({ username: user, password: pass })
     else
@@ -208,11 +230,13 @@ async function handleLoginImport() {
     password.value = ''
     importResult.value = result
     showLoginForm.value = false
-    uni.showToast({ title: `已导入 ${result.total} 门课程`, icon: 'success' })
+    showMessage(`已导入 ${result.total} 门课程`, 'success')
     await reloadBinding()
   }
   catch (error) {
-    formError.value = getApiError(error, '登录失败').message
+    // 字段错误显示在对应输入框下；IAAA 登录失败、需要验证码、账号锁定等显示在表单底部
+    const requestError = handleApiException(error, { showToast: false })
+    formError.value = hasLoginFieldErrors() ? '' : requestError.message
   }
   finally {
     importing.value = false
@@ -225,7 +249,7 @@ async function handleRefresh() {
   const outcome = await syncPortal(selectedTerm.value || undefined)
   if (outcome.status === 'ok') {
     importResult.value = outcome.result
-    uni.showToast({ title: `已同步 ${outcome.result.total} 门课程`, icon: 'success' })
+    showMessage(`已同步 ${outcome.result.total} 门课程`, 'success')
     await reloadBinding()
     return
   }
@@ -236,7 +260,7 @@ async function handleRefresh() {
       username.value = binding.value.pku_username
     return
   }
-  uni.showToast({ title: outcome.error.message, icon: 'none' })
+  handleApiException(outcome.error)
 }
 
 async function handleUnbind() {
@@ -258,12 +282,11 @@ async function handleUnbind() {
     password.value = ''
     importResult.value = null
     showLoginForm.value = false
-    uni.showToast({ title: '已解除绑定', icon: 'success' })
+    showMessage('已解除绑定', 'success')
     await reloadBinding()
   }
   catch (error) {
-    // 失败提示由请求层统一显示
-    console.error('解除绑定失败:', error)
+    handleApiException(error)
   }
   finally {
     unbinding.value = false
@@ -281,7 +304,7 @@ async function handleConsentChange(value: boolean) {
     binding.value = await updateConsents({ timetable: value })
   }
   catch (error) {
-    console.error('更新授权失败:', error)
+    handleApiException(error)
     current.consents.timetable = previous
   }
   finally {
@@ -296,12 +319,15 @@ async function handleParse() {
   parsing.value = true
   pasteError.value = ''
   pasteResult.value = null
+  clearFieldErrors()
   try {
-    dryRun.value = await importText({ term: selectedTerm.value || undefined, text, dry_run: true }, { hideErrorToast: true })
+    dryRun.value = await importText({ term: selectedTerm.value || undefined, text, dry_run: true })
   }
   catch (error) {
     dryRun.value = null
-    pasteError.value = getApiError(error, '解析失败').message
+    // text 字段的错误显示在文本框下，其余失败显示在按钮下方
+    const requestError = handleApiException(error, { showToast: false })
+    pasteError.value = getFieldMessages('text').length ? '' : requestError.message
   }
   finally {
     parsing.value = false
@@ -314,15 +340,17 @@ async function handlePasteImport() {
     return
   pasteImporting.value = true
   pasteError.value = ''
+  clearFieldErrors()
   try {
-    const result = await importText({ term: selectedTerm.value || undefined, text }, { hideErrorToast: true })
+    const result = await importText({ term: selectedTerm.value || undefined, text })
     pasteResult.value = result
     dryRun.value = null
     pasteText.value = ''
-    uni.showToast({ title: `已导入 ${result.total} 门课程`, icon: 'success' })
+    showMessage(`已导入 ${result.total} 门课程`, 'success')
   }
   catch (error) {
-    pasteError.value = getApiError(error, '导入失败').message
+    const requestError = handleApiException(error, { showToast: false })
+    pasteError.value = getFieldMessages('text').length ? '' : requestError.message
   }
   finally {
     pasteImporting.value = false
@@ -344,7 +372,7 @@ async function handleToggle(key: ToggleKey, value: boolean) {
     settings.value = await updateSettings({ [key]: value })
   }
   catch (error) {
-    console.error('更新设置失败:', error)
+    handleApiException(error)
     current[key] = previous
   }
   finally {
@@ -404,8 +432,7 @@ async function handleReminderToggle(value: boolean) {
     rememberEnabled(value)
   }
   catch (error) {
-    // 失败提示由请求层统一显示
-    console.error('更新提醒设置失败:', error)
+    handleApiException(error)
     current.reminder_enabled = previous
     return
   }
@@ -438,7 +465,7 @@ async function handleReminderMinutesChange(event: PickerEvent) {
     settings.value = await updateSettings({ reminder_minutes: minutes })
   }
   catch (error) {
-    console.error('更新提醒时间失败:', error)
+    handleApiException(error)
     current.reminder_minutes = previous
   }
   finally {
@@ -467,7 +494,7 @@ async function handleCopyIcs() {
     uni.setClipboardData({ data: data.url })
   }
   catch (error) {
-    console.error('获取订阅链接失败:', error)
+    handleApiException(error)
   }
   finally {
     icsLoading.value = false
@@ -491,7 +518,7 @@ async function handleRotateIcs() {
     uni.setClipboardData({ data: ics.value.url })
   }
   catch (error) {
-    console.error('重置订阅链接失败:', error)
+    handleApiException(error)
   }
   finally {
     icsLoading.value = false
@@ -510,6 +537,7 @@ onLoad((options) => {
 
 <template>
   <view class="min-h-screen bg-gray-50 pb-10">
+    <uv-toast ref="toastRef" />
     <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
       <uv-loading-icon mode="circle" />
       <text class="mt-3">正在加载…</text>
@@ -603,6 +631,7 @@ onLoad((options) => {
               placeholder="北大门户学号"
               :maxlength="32"
             >
+            <ApiFieldError :messages="getFieldMessages('username')" />
           </view>
           <view>
             <text class="mb-2 block text-sm text-gray-700 font-medium">密码</text>
@@ -613,6 +642,7 @@ onLoad((options) => {
               password
               placeholder="门户密码，仅用于本次登录"
             >
+            <ApiFieldError :messages="getFieldMessages('password')" />
           </view>
           <view class="flex items-start gap-2" @click="consent = !consent">
             <view class="consent-box" :class="{ 'consent-box--checked': consent }">
@@ -629,6 +659,7 @@ onLoad((options) => {
             </view>
             <uv-switch v-model="remember" size="22" active-color="#2563eb" />
           </view>
+          <ApiFieldError :messages="getFieldMessages('non_field_errors')" />
           <text v-if="formError" class="block text-sm text-red-500">{{ formError }}</text>
           <button
             class="w-full rounded-lg bg-blue-500 py-2.5 text-sm text-white font-medium"
@@ -669,6 +700,7 @@ onLoad((options) => {
           placeholder="粘贴选课结果或门户课表文本"
           :maxlength="-1"
         />
+        <ApiFieldError :messages="getFieldMessages('text')" />
         <view class="mt-3 flex gap-3">
           <button
             class="flex-1 border border-blue-200 rounded-lg bg-white py-2.5 text-sm text-blue-600 font-medium"

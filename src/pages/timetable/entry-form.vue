@@ -1,9 +1,11 @@
 <script lang="ts" setup>
 import type { CatalogEntry, CatalogSlot, Entry, EntryIn, Parity, Term } from '@/api/types/timetable'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { onLoad } from '@dcloudio/uni-app'
 import { computed, reactive, ref, watch } from 'vue'
 import { createEntry, deleteEntry, getTerms, listEntries, searchCatalog, updateEntry } from '@/api/timetable'
-import { getApiError } from '@/http/error'
+import ApiFieldError from '@/components/ApiFieldError.vue'
+import { useApiException } from '@/hooks/useApiException'
 import { debounce } from '@/utils/debounce'
 import { confirmModal } from '@/utils/dialog'
 import { describeSlot, PARITY_LABELS, sectionRows, WEEKDAY_LABELS } from '@/utils/timetable'
@@ -25,7 +27,15 @@ const loadError = ref('')
 const submitting = ref(false)
 const deleting = ref(false)
 const formError = ref('')
-const fieldErrors = ref<Record<string, string[]>>({})
+const toastRef = ref<UvToastInstance | null>(null)
+const {
+  clearFieldError,
+  clearFieldErrors,
+  getFieldMessages,
+  handleApiException,
+  setFieldError,
+  showMessage,
+} = useApiException(toastRef)
 
 const isEdit = computed(() => entryId.value !== null)
 
@@ -55,8 +65,27 @@ const parityOptions = [...PARITY_LABELS]
 const startSectionIndex = computed(() => Math.max(rows.value.findIndex(row => row.section === form.start_section), 0))
 const endSectionIndex = computed(() => Math.max(rows.value.findIndex(row => row.section === form.end_section), 0))
 
-function fieldError(field: string) {
-  return fieldErrors.value[field]?.join('；') ?? ''
+/** 会在控件旁显示后端字段错误的表单字段 */
+const FORM_FIELDS = [
+  'name',
+  'weekday',
+  'start_section',
+  'end_section',
+  'week_start',
+  'week_end',
+  'parity',
+  'room',
+  'teacher',
+  'note',
+] as const
+
+// 字段一改就清掉它的错误提示
+for (const field of FORM_FIELDS)
+  watch(() => form[field], () => clearFieldError(field))
+
+/** 后端字段错误里有没有会显示在表单里的；一个都没有时退回整体 message，避免错误被吞掉 */
+function hasRenderedFieldErrors() {
+  return [...FORM_FIELDS, 'non_field_errors'].some(field => getFieldMessages(field).length > 0)
 }
 
 function pickerIndex(event: { detail: { value: number | string } }) {
@@ -117,7 +146,7 @@ async function runCatalogSearch(q: string) {
   const seq = ++catalogSeq
   catalogSearching.value = true
   try {
-    const results = await searchCatalog({ term: term.value.code, q }, { hideErrorToast: true })
+    const results = await searchCatalog({ term: term.value.code, q })
     if (seq === catalogSeq)
       catalogResults.value = Array.isArray(results) ? results : []
   }
@@ -184,7 +213,7 @@ function applyCatalogEntry(entry: CatalogEntry, slot: CatalogSlot | null) {
     if (slot.room)
       form.room = slot.room
   }
-  fieldErrors.value = {}
+  clearFieldErrors()
   formError.value = ''
 }
 
@@ -232,7 +261,7 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const terms = await getTerms({ hideErrorToast: true })
+    const terms = await getTerms()
     const picked = (requestedTerm.value && terms.terms.find(item => item.code === requestedTerm.value))
       || terms.current
       || terms.terms[0]
@@ -245,7 +274,7 @@ async function load() {
     form.week_end = Math.min(form.week_end, picked.total_weeks)
 
     if (entryId.value !== null) {
-      const entries = await listEntries({ term: picked.code }, { hideErrorToast: true })
+      const entries = await listEntries({ term: picked.code })
       const found = entries.find(item => item.id === entryId.value)
       if (!found) {
         loadError.value = '未找到该日程，可能已被删除。'
@@ -260,7 +289,7 @@ async function load() {
     }
   }
   catch (error) {
-    loadError.value = getApiError(error, '加载失败').message
+    loadError.value = handleApiException(error, { showToast: false }).message
   }
   finally {
     loading.value = false
@@ -268,18 +297,18 @@ async function load() {
 }
 
 function validate(): boolean {
-  fieldErrors.value = {}
+  clearFieldErrors()
   formError.value = ''
   if (!form.name.trim()) {
-    fieldErrors.value = { name: ['请填写名称'] }
+    setFieldError('name', '请填写名称', 'required')
     return false
   }
   if (form.end_section < form.start_section) {
-    fieldErrors.value = { end_section: ['结束节次不能早于开始节次'] }
+    setFieldError('end_section', '结束节次不能早于开始节次')
     return false
   }
   if (form.week_end < form.week_start) {
-    fieldErrors.value = { week_end: ['结束周不能早于开始周'] }
+    setFieldError('week_end', '结束周不能早于开始周')
     return false
   }
   return true
@@ -318,20 +347,19 @@ async function handleSubmit() {
     if (existing.value) {
       // 学期不可改；hidden / color 由课表页与服务端维护，这里只提交表单字段
       const { term: _term, hidden: _hidden, color: _color, ...patch } = payload
-      await updateEntry(existing.value.id, patch, { hideErrorToast: true })
+      await updateEntry(existing.value.id, patch)
     }
     else {
-      await createEntry(payload, { hideErrorToast: true })
+      await createEntry(payload)
     }
-    uni.showToast({ title: '已保存', icon: 'success' })
-    uni.navigateBack()
+    // 页内 toast 会随页面一起关闭：先让用户看到提示再返回；保持 submitting，避免等待期间重复提交
+    showMessage('已保存', 'success')
+    setTimeout(() => uni.navigateBack(), 1000)
   }
   catch (error) {
-    const info = getApiError(error, '保存失败')
-    fieldErrors.value = info.fieldErrors
-    formError.value = Object.keys(info.fieldErrors).length ? '' : info.message
-  }
-  finally {
+    // 字段错误显示在对应控件旁，其余失败显示在表单底部
+    const requestError = handleApiException(error, { showToast: false })
+    formError.value = hasRenderedFieldErrors() ? '' : requestError.message
     submitting.value = false
   }
 }
@@ -350,14 +378,11 @@ async function handleDelete() {
   deleting.value = true
   try {
     await deleteEntry(existing.value.id)
-    uni.showToast({ title: '已删除', icon: 'success' })
-    uni.navigateBack()
+    showMessage('已删除', 'success')
+    setTimeout(() => uni.navigateBack(), 1000)
   }
   catch (error) {
-    // 失败提示由请求层统一显示
-    console.error('删除日程失败:', error)
-  }
-  finally {
+    handleApiException(error)
     deleting.value = false
   }
 }
@@ -386,6 +411,7 @@ onLoad((options) => {
 
 <template>
   <view class="min-h-screen bg-gray-50 pb-10">
+    <uv-toast ref="toastRef" />
     <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
       <uv-loading-icon mode="circle" />
       <text class="mt-3">正在加载…</text>
@@ -463,11 +489,11 @@ onLoad((options) => {
           <input
             v-model="form.name"
             class="form-input"
-            :class="{ 'form-input--error': fieldError('name') }"
+            :class="{ 'form-input--error': getFieldMessages('name').length }"
             placeholder="如：自习、社团例会"
             :maxlength="60"
           >
-          <text v-if="fieldError('name')" class="form-error">{{ fieldError('name') }}</text>
+          <ApiFieldError :messages="getFieldMessages('name')" />
         </view>
 
         <view>
@@ -478,7 +504,7 @@ onLoad((options) => {
               <text class="i-carbon-chevron-down text-gray-400" />
             </view>
           </picker>
-          <text v-if="fieldError('weekday')" class="form-error">{{ fieldError('weekday') }}</text>
+          <ApiFieldError :messages="getFieldMessages('weekday')" />
         </view>
 
         <view class="flex gap-3">
@@ -490,7 +516,7 @@ onLoad((options) => {
                 <text class="i-carbon-chevron-down text-gray-400" />
               </view>
             </picker>
-            <text v-if="fieldError('start_section')" class="form-error">{{ fieldError('start_section') }}</text>
+            <ApiFieldError :messages="getFieldMessages('start_section')" />
           </view>
           <view class="flex-1">
             <text class="mb-2 block text-sm text-gray-700 font-medium">结束节次</text>
@@ -500,7 +526,7 @@ onLoad((options) => {
                 <text class="i-carbon-chevron-down text-gray-400" />
               </view>
             </picker>
-            <text v-if="fieldError('end_section')" class="form-error">{{ fieldError('end_section') }}</text>
+            <ApiFieldError :messages="getFieldMessages('end_section')" />
           </view>
         </view>
         <text class="block text-xs text-gray-400">
@@ -516,7 +542,7 @@ onLoad((options) => {
                 <text class="i-carbon-chevron-down text-gray-400" />
               </view>
             </picker>
-            <text v-if="fieldError('week_start')" class="form-error">{{ fieldError('week_start') }}</text>
+            <ApiFieldError :messages="getFieldMessages('week_start')" />
           </view>
           <view class="flex-1">
             <text class="mb-2 block text-sm text-gray-700 font-medium">结束周</text>
@@ -526,7 +552,7 @@ onLoad((options) => {
                 <text class="i-carbon-chevron-down text-gray-400" />
               </view>
             </picker>
-            <text v-if="fieldError('week_end')" class="form-error">{{ fieldError('week_end') }}</text>
+            <ApiFieldError :messages="getFieldMessages('week_end')" />
           </view>
         </view>
 
@@ -538,19 +564,19 @@ onLoad((options) => {
               <text class="i-carbon-chevron-down text-gray-400" />
             </view>
           </picker>
-          <text v-if="fieldError('parity')" class="form-error">{{ fieldError('parity') }}</text>
+          <ApiFieldError :messages="getFieldMessages('parity')" />
         </view>
 
         <view>
           <text class="mb-2 block text-sm text-gray-700 font-medium">地点</text>
           <input v-model="form.room" class="form-input" placeholder="选填" :maxlength="60">
-          <text v-if="fieldError('room')" class="form-error">{{ fieldError('room') }}</text>
+          <ApiFieldError :messages="getFieldMessages('room')" />
         </view>
 
         <view>
           <text class="mb-2 block text-sm text-gray-700 font-medium">教师 / 负责人</text>
           <input v-model="form.teacher" class="form-input" placeholder="选填" :maxlength="60">
-          <text v-if="fieldError('teacher')" class="form-error">{{ fieldError('teacher') }}</text>
+          <ApiFieldError :messages="getFieldMessages('teacher')" />
         </view>
 
         <view>
@@ -562,9 +588,10 @@ onLoad((options) => {
             :maxlength="200"
             auto-height
           />
-          <text v-if="fieldError('note')" class="form-error">{{ fieldError('note') }}</text>
+          <ApiFieldError :messages="getFieldMessages('note')" />
         </view>
 
+        <ApiFieldError :messages="getFieldMessages('non_field_errors')" />
         <text v-if="formError" class="block text-sm text-red-500">{{ formError }}</text>
       </view>
 
@@ -621,13 +648,6 @@ onLoad((options) => {
   min-height: 120rpx;
   padding: 16rpx 24rpx;
   line-height: 1.5;
-}
-
-.form-error {
-  display: block;
-  margin-top: 8rpx;
-  font-size: 24rpx;
-  color: #ef4444;
 }
 
 button::after {

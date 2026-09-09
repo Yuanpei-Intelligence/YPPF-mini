@@ -1,9 +1,10 @@
 <script lang="ts" setup>
 import type { Occurrence, Settings, WeekView } from '@/api/types/timetable'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { onLoad } from '@dcloudio/uni-app'
 import { computed, getCurrentInstance, nextTick, ref } from 'vue'
 import { getSettings, getWeek } from '@/api/timetable'
-import { getApiError } from '@/http/error'
+import { useApiException } from '@/hooks/useApiException'
 import { useUserStore } from '@/store/user'
 import { confirmModal } from '@/utils/dialog'
 import {
@@ -55,6 +56,8 @@ const canvasSize = ref({ width: 0, height: 0 })
 const query = ref<{ term?: string, week?: number }>({})
 const instance = getCurrentInstance()
 const userStore = useUserStore()
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 let canvasNode: Canvas2D | null = null
 
 const rows = computed(() => sectionRows(view.value?.term ?? null))
@@ -331,8 +334,8 @@ async function load() {
   loadError.value = ''
   try {
     const [weekData, settingsData] = await Promise.all([
-      getWeek(query.value, { hideErrorToast: true }),
-      getSettings({ hideErrorToast: true }),
+      getWeek(query.value),
+      getSettings(),
     ])
     view.value = weekData
     settings.value = settingsData
@@ -341,7 +344,7 @@ async function load() {
       await userStore.fetchUserInfo().catch(() => undefined)
   }
   catch (error) {
-    loadError.value = getApiError(error, '课表加载失败').message
+    loadError.value = handleApiException(error, { showToast: false }).message
     loading.value = false
     return
   }
@@ -389,7 +392,7 @@ async function handleSave() {
   try {
     const filePath = await exportImage()
     await saveToAlbum(filePath)
-    uni.showToast({ title: '已保存到相册', icon: 'success' })
+    showMessage('已保存到相册', 'success')
   }
   catch (error) {
     const message = (error as { errMsg?: string } | null)?.errMsg ?? ''
@@ -404,7 +407,7 @@ async function handleSave() {
         uni.openSetting()
     }
     else if (!/cancel/i.test(message)) {
-      uni.showToast({ title: '保存失败，请重试', icon: 'none' })
+      showMessage('保存失败，请重试', 'error')
     }
   }
   finally {
@@ -425,6 +428,7 @@ onLoad((options) => {
 
 <template>
   <view class="min-h-screen bg-gray-50 pb-10">
+    <uv-toast ref="toastRef" />
     <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
       <uv-loading-icon mode="circle" />
       <text class="mt-3">正在生成海报…</text>

@@ -1,10 +1,12 @@
 <script lang="ts" setup>
 import type { GradeRow, GradesOut, GradesTerm } from '@/api/types/grades'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { onLoad, onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { computed, ref } from 'vue'
 import { deleteGrades, getGrades, syncGrades } from '@/api/grades'
 import { updateConsents } from '@/api/pku'
-import { getApiError } from '@/http/error'
+import { useApiException } from '@/hooks/useApiException'
+import { toRequestError } from '@/http/errors'
 import { confirmModal } from '@/utils/dialog'
 import { describeTermCode, formatDateTime } from '@/utils/timetable'
 
@@ -30,6 +32,8 @@ const syncing = ref(false)
 const revoking = ref(false)
 /** 学期码 -> 是否折叠 */
 const collapsed = ref<Record<string, boolean>>({})
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 /** 已把用户带去导入页绑定 / 重新登录；回来时重新加载但不再自动跳转，避免来回弹 */
 let leftForBinding = false
 
@@ -107,8 +111,8 @@ function goImport() {
  * 把请求失败映射到页面状态：403 未授权 -> 授权引导；404 未绑定 / 409 会话失效 -> 提示并转到导入页；
  * 其它失败：已有数据时 toast，否则整页错误
  */
-function handleFailure(error: unknown, fallback: string, options: { redirect?: boolean } = {}) {
-  const info = getApiError(error, fallback)
+function handleFailure(error: unknown, options: { redirect?: boolean } = {}) {
+  const info = toRequestError(error)
   if (info.statusCode === 403 && info.code === 'CONSENT_REQUIRED') {
     gate.value = 'consent'
     loadError.value = ''
@@ -121,13 +125,17 @@ function handleFailure(error: unknown, fallback: string, options: { redirect?: b
     gateMessage.value = notBound ? '请先绑定北大账号' : '门户会话已失效，请重新登录'
     loadError.value = ''
     if (options.redirect !== false) {
-      uni.showToast({ title: gateMessage.value, icon: 'none' })
-      goImport()
+      // 页内 toast 会被新页面盖住：先让用户看到原因，再转到导入页
+      showMessage(gateMessage.value, 'warning')
+      setTimeout(() => {
+        if (!leftForBinding)
+          goImport()
+      }, 1500)
     }
     return
   }
   if (data.value)
-    uni.showToast({ title: info.message, icon: 'none' })
+    handleApiException(error)
   else
     loadError.value = info.message
 }
@@ -138,10 +146,10 @@ async function load(options: { silent?: boolean, redirect?: boolean } = {}) {
     loadError.value = ''
   }
   try {
-    applyData(await getGrades({ hideErrorToast: true }))
+    applyData(await getGrades())
   }
   catch (error) {
-    handleFailure(error, '成绩加载失败', { redirect: options.redirect })
+    handleFailure(error, { redirect: options.redirect })
   }
   finally {
     loading.value = false
@@ -154,11 +162,11 @@ async function handleConsent() {
     return
   consenting.value = true
   try {
-    await updateConsents({ grades: true }, { hideErrorToast: true })
-    applyData(await syncGrades({ hideErrorToast: true }))
+    await updateConsents({ grades: true })
+    applyData(await syncGrades())
   }
   catch (error) {
-    handleFailure(error, '同步失败')
+    handleFailure(error)
   }
   finally {
     consenting.value = false
@@ -171,11 +179,11 @@ async function handleSync() {
     return
   syncing.value = true
   try {
-    applyData(await syncGrades({ hideErrorToast: true }))
-    uni.showToast({ title: '已同步', icon: 'success' })
+    applyData(await syncGrades())
+    showMessage('已同步', 'success')
   }
   catch (error) {
-    handleFailure(error, '同步失败')
+    handleFailure(error)
   }
   finally {
     syncing.value = false
@@ -195,23 +203,23 @@ async function handleRevoke() {
     return
   revoking.value = true
   try {
-    await updateConsents({ grades: false }, { hideErrorToast: true })
+    await updateConsents({ grades: false })
     try {
-      await deleteGrades({ hideErrorToast: true })
+      await deleteGrades()
     }
     catch (error) {
       // 撤销授权时服务端已同步删除成绩，403 / 404 说明已无可删
-      const info = getApiError(error, '删除失败')
+      const info = toRequestError(error)
       if (info.statusCode !== 403 && info.statusCode !== 404)
         throw error
     }
     data.value = null
     collapsed.value = {}
     gate.value = 'consent'
-    uni.showToast({ title: '已撤销授权并删除成绩', icon: 'success' })
+    showMessage('已撤销授权并删除成绩', 'success')
   }
   catch (error) {
-    handleFailure(error, '撤销失败')
+    handleFailure(error)
   }
   finally {
     revoking.value = false
@@ -238,6 +246,7 @@ onPullDownRefresh(async () => {
 
 <template>
   <view class="min-h-screen bg-gray-50 pb-10">
+    <uv-toast ref="toastRef" />
     <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
       <uv-loading-icon mode="circle" />
       <text class="mt-3">正在加载成绩…</text>

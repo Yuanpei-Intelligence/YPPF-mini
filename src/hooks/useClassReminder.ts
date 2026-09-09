@@ -65,7 +65,7 @@ export function useClassReminder() {
       return templateId.value
     }
     try {
-      const data = await getSubscribeTemplates({ hideErrorToast: true })
+      const data = await getSubscribeTemplates()
       templateId.value = data.class_reminder.template_id
       saveReminderCache({ enabled: cached?.enabled ?? false, template_id: templateId.value, checked_at: Date.now() })
     }
@@ -98,7 +98,7 @@ export function useClassReminder() {
       if (outcome !== 'accept')
         return outcome
       try {
-        await grantSubscribe({ template_key: 'class_reminder' }, { hideErrorToast: true })
+        await grantSubscribe({ template_key: 'class_reminder' })
         return 'accept'
       }
       catch (error) {
@@ -120,8 +120,8 @@ export function useClassReminder() {
       let cached = readReminderCache()
       if (!cached || Date.now() - cached.checked_at >= CACHE_TTL_MS) {
         const [settings, templates] = await Promise.all([
-          getSettings({ hideErrorToast: true }),
-          getSubscribeTemplates({ hideErrorToast: true }),
+          getSettings(),
+          getSubscribeTemplates(),
         ])
         cached = {
           enabled: settings.reminder_enabled,
