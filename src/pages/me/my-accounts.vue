@@ -2,11 +2,14 @@
 import type { IAccount } from '@/api/types/login'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import { storeToRefs } from 'pinia'
-import { onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { getMyAccounts } from '@/api/login'
+import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { useUserStore } from '@/store'
 import { useTokenStore } from '@/store/token'
+import { tokens } from '@/style/tokens'
 import { toBackendURL } from '@/utils'
 
 definePage({
@@ -22,14 +25,20 @@ const { userInfo } = storeToRefs(userStore)
 const accounts = ref<IAccount[]>([])
 const currentAccountId = ref<string>('')
 const loading = ref(false)
+/** 首屏加载失败的页内错误；已有数据时失败只 toast */
+const loadError = ref('')
 const switchingUsername = ref<string | null>(null)
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
 
+const defaultAvatar = '/static/images/default-avatar.png'
+const currentAvatar = computed(() => toBackendURL(userInfo.value.avatar_url || userInfo.value.avatar || defaultAvatar))
+const currentName = computed(() => userInfo.value.name || userInfo.value.username || '未设置昵称')
+
 // 加载账户列表
 async function loadAccounts() {
   if (!tokenStore.hasLogin) {
-    showMessage('请先登录。', 'warning')
+    showMessage('请先登录', 'warning')
     return
   }
 
@@ -41,10 +50,14 @@ async function loadAccounts() {
     accounts.value = res.accounts.filter(
       account => account.username !== userInfo.value.username,
     )
+    loadError.value = ''
   }
   catch (error) {
     console.error('加载账户列表失败:', error)
-    handleApiException(error)
+    if (accounts.value.length > 0)
+      handleApiException(error)
+    else
+      loadError.value = handleApiException(error, { showToast: false }).message
   }
   finally {
     loading.value = false
@@ -53,20 +66,21 @@ async function loadAccounts() {
 
 // 切换账户
 async function switchAccount(account: IAccount) {
+  if (switchingUsername.value)
+    return
   if (account.username === userInfo.value.username) {
-    showMessage('不能切换到当前账户。', 'warning')
+    showMessage('已是当前账户', 'warning')
     return
   }
 
   switchingUsername.value = account.username
-
   try {
     await tokenStore.wxLogin(account.username)
-    showMessage('切换成功。', 'success')
+    showMessage('已切换', 'success')
     // 切换成功后返回上一页
     setTimeout(() => {
       uni.navigateBack()
-    }, 1500)
+    }, 600)
   }
   catch (error) {
     console.error('切换账户失败:', error)
@@ -79,7 +93,7 @@ async function switchAccount(account: IAccount) {
 
 // 获取账户类型显示文本
 function getAccountTypeText(type: 'person' | 'org') {
-  return type === 'person' ? '个人' : '组织'
+  return type === 'person' ? '个人' : '小组'
 }
 
 onMounted(() => {
@@ -88,65 +102,58 @@ onMounted(() => {
 </script>
 
 <template>
-  <uv-toast ref="toastRef" />
-  <view class="min-h-screen bg-gray-50">
-    <!-- 当前账户信息 -->
-    <view v-if="tokenStore.hasLogin" class="mx-4 mt-4 overflow-hidden rounded-2xl bg-white shadow-sm">
-      <view class="border-b border-gray-50 px-4 py-3">
-        <view class="text-sm text-gray-500">
-          当前账户
+  <view class="yp-page">
+    <uv-toast ref="toastRef" />
+
+    <!-- 当前账户 -->
+    <view v-if="tokenStore.hasLogin" class="bg-card">
+      <text class="block px-4 pt-3 text-xs text-fg-3">当前账户</text>
+      <view class="yp-list-item">
+        <view class="h-80rpx w-80rpx shrink-0 overflow-hidden rounded-full bg-fill">
+          <image :src="currentAvatar" class="h-full w-full" mode="aspectFill" />
         </view>
-      </view>
-      <view class="flex items-center justify-between px-4 py-4">
-        <view class="flex-1">
-          <view class="text-lg text-gray-800 font-semibold">
-            {{ userInfo.name || userInfo.username || '未设置昵称' }}
-          </view>
+        <view class="min-w-0 flex-1">
+          <text class="block truncate text-base text-fg-1 font-medium">{{ currentName }}</text>
+          <text v-if="userInfo.username" class="block truncate text-xs text-fg-3">{{ userInfo.username }}</text>
         </view>
-        <view class="ml-4 rounded-full bg-blue-100 px-3 py-1 text-xs text-blue-600">
-          当前
-        </view>
+        <StatusTag type="processing" text="当前" />
       </view>
     </view>
 
-    <!-- 账户列表 -->
-    <view class="mx-4 mt-4">
-      <view v-if="loading" class="flex items-center justify-center py-20">
-        <view class="text-gray-400">
-          加载中...
-        </view>
-      </view>
-
-      <view v-else-if="accounts.length === 0" class="flex items-center justify-center py-20">
-        <view class="text-gray-400">
-          暂无其他账户
-        </view>
-      </view>
-
-      <view v-else class="overflow-hidden rounded-2xl bg-white shadow-sm">
-        <view
-          v-for="(account) in accounts"
-          :key="account.username"
-          class="flex items-center justify-between border-b border-gray-50 px-4 py-4 last:border-none active:bg-gray-50"
-          @click="switchAccount(account)"
-        >
-          <view class="flex-1">
-            <view class="flex items-center">
-              <view class="h-10 w-10 flex-shrink-0 overflow-hidden border-4 border-white/20 rounded-full bg-white shadow-sm">
+    <!-- 可切换的账户 -->
+    <view class="mt-3">
+      <text class="block px-4 pb-2 text-xs text-fg-3">可切换的账户</text>
+      <PageState
+        :loading="loading && accounts.length === 0"
+        :error="loadError"
+        :empty="accounts.length === 0"
+        empty-icon="i-carbon-user"
+        empty-text="还没有其他账户"
+        @retry="loadAccounts"
+      >
+        <view class="bg-card">
+          <template v-for="(account, index) in accounts" :key="account.username">
+            <view v-if="index > 0" class="yp-divider" />
+            <view class="yp-list-item" @click="switchAccount(account)">
+              <view class="h-80rpx w-80rpx shrink-0 overflow-hidden rounded-full bg-fill">
                 <image :src="toBackendURL(account.avatar)" class="h-full w-full" mode="aspectFill" />
               </view>
-              <view class="pl-4 text-lg text-gray-800 font-semibold">
-                {{ account.name || account.username }}
+              <view class="min-w-0 flex-1">
+                <text class="block truncate text-base text-fg-1 font-medium">{{ account.name || account.username }}</text>
+                <text class="block truncate text-xs text-fg-3">{{ account.username }}</text>
               </view>
-              <view class="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
-                {{ getAccountTypeText(account.type) }}
-              </view>
+              <StatusTag type="default" :text="getAccountTypeText(account.type)" />
+              <uv-loading-icon
+                v-if="switchingUsername === account.username"
+                mode="circle"
+                :color="tokens.primary"
+                size="18"
+              />
+              <view v-else class="i-carbon-chevron-right text-base text-fg-4" />
             </view>
-          </view>
-          <view class="i-carbon-chevron-right ml-4 text-sm text-gray-300" />
-          <uv-loading-icon v-if="switchingUsername === account.username" mode="circle" size="18" />
+          </template>
         </view>
-      </view>
+      </PageState>
     </view>
   </view>
 </template>
