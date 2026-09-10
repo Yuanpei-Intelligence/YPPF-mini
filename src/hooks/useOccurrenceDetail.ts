@@ -4,6 +4,7 @@ import type { RequestError } from '@/http/errors'
 import type { DetailActionKey } from '@/utils/timetable'
 import { computed, ref } from 'vue'
 import { deleteEntry, deleteOverrides, getEntry, updateEntry } from '@/api/timetable'
+import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { confirmModal } from '@/utils/dialog'
 import {
@@ -35,13 +36,14 @@ export interface UseOccurrenceDetailOptions {
  * 本机隐藏偏好（仅本机隐藏的实时日程 id、“显示已隐藏”开关）也放在这里，页面在 onShow 时调 reloadLocalPrefs。
  */
 export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, options: UseOccurrenceDetailOptions) {
+  const userStore = useUserStore()
   const detail = ref<Occurrence | null>(null)
   const entry = ref<Entry | null>(null)
   const entryLoading = ref(false)
   const entryError = ref('')
   const busy = ref(false)
   const showHidden = ref(readShowHidden())
-  const localHiddenIds = ref<string[]>(readLocalHiddenIds())
+  const localHiddenIds = ref<string[]>(readLocalHiddenIds(userStore.userInfo.username))
   const localHiddenSet = computed(() => new Set(localHiddenIds.value))
   let entrySeq = 0
 
@@ -54,7 +56,7 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
   /** 导入页可能改了本机隐藏偏好；页面 onShow 时重读 */
   function reloadLocalPrefs() {
     showHidden.value = readShowHidden()
-    localHiddenIds.value = readLocalHiddenIds()
+    localHiddenIds.value = readLocalHiddenIds(userStore.userInfo.username)
   }
 
   /** 有存储条目的日程（含由课程匹配出的考试）才有详情可取 */
@@ -126,7 +128,7 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
         ? Array.from(new Set([...localHiddenIds.value, item.id]))
         : localHiddenIds.value.filter(id => id !== item.id)
       localHiddenIds.value = next
-      saveLocalHiddenIds(next)
+      saveLocalHiddenIds(userStore.userInfo.username, next)
     }
     return true
   }

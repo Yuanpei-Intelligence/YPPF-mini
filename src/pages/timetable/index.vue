@@ -11,6 +11,7 @@ import { useApiException } from '@/hooks/useApiException'
 import { useClassReminder } from '@/hooks/useClassReminder'
 import { useOccurrenceDetail } from '@/hooks/useOccurrenceDetail'
 import { useTimetableSync } from '@/hooks/useTimetableSync'
+import { useUserStore } from '@/store/user'
 import {
   AUDIT_BADGE,
   cacheWeekView,
@@ -255,6 +256,7 @@ const weekCells = computed<WeekCell[]>(() => {
   })
 })
 
+const userStore = useUserStore()
 let requestSeq = 0
 
 async function loadWeek(target: { term: string, week: number } | null, options: { silent?: boolean } = {}) {
@@ -270,7 +272,7 @@ async function loadWeek(target: { term: string, week: number } | null, options: 
     loadError.value = ''
     // 只缓存当前周，下次打开先用它秒开
     if (target === null || data.week === data.today.week)
-      cacheWeekView(data)
+      cacheWeekView(userStore.userInfo.username, data)
     if (data.occurrences.length === 0)
       void checkTermEntries(data.term.code)
     else
@@ -412,7 +414,7 @@ function goGrades() {
 let shownBefore = false
 
 onLoad(() => {
-  const cached = readCachedWeekView()
+  const cached = readCachedWeekView(userStore.userInfo.username)
   if (cached)
     view.value = cached
   void loadWeek(null)

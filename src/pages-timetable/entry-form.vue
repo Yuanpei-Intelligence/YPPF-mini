@@ -29,6 +29,7 @@ import {
 import ApiFieldError from '@/components/ApiFieldError.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { toRequestError } from '@/http/errors'
+import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { debounce } from '@/utils/debounce'
 import { confirmModal } from '@/utils/dialog'
@@ -553,8 +554,9 @@ async function load() {
     }
     else if (catalogIdParam.value !== null) {
       // 课程库页“手动填写”：整行暂存在本机，这里按 id 取回填入，默认加为旁听
-      const pick = readCatalogPick(catalogIdParam.value)
-      clearCatalogPick()
+      const account = useUserStore().userInfo.username
+      const pick = readCatalogPick(account, catalogIdParam.value)
+      clearCatalogPick(account)
       if (pick) {
         pickCatalogEntry(pick)
         form.role = 'audit'

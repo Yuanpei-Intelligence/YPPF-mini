@@ -6,6 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { addFromCatalog, getTerms, searchCatalog } from '@/api/timetable'
 import { useApiException } from '@/hooks/useApiException'
 import { toRequestError } from '@/http/errors'
+import { useUserStore } from '@/store/user'
 import { debounce } from '@/utils/debounce'
 import { describeCatalogMeta, describeCourseCode, describeSlot, saveCatalogPick } from '@/utils/timetable'
 
@@ -128,7 +129,7 @@ function describeSlotChoice(slot: CatalogSlot, index: number) {
 function goManual(entry: CatalogEntry) {
   if (!term.value)
     return
-  saveCatalogPick({ ...entry, slots: Array.isArray(entry.slots) ? entry.slots : [] })
+  saveCatalogPick(useUserStore().userInfo.username, { ...entry, slots: Array.isArray(entry.slots) ? entry.slots : [] })
   uni.navigateTo({
     url: `/pages-timetable/entry-form?catalog_id=${entry.id}&term=${encodeURIComponent(term.value.code)}`,
   })
