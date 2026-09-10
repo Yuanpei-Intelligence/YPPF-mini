@@ -562,11 +562,11 @@ async function handleRotateIcs() {
 }
 
 function goEntryForm() {
-  uni.navigateTo({ url: `/pages/timetable/entry-form?term=${encodeURIComponent(selectedTerm.value)}` })
+  uni.navigateTo({ url: `/pages-timetable/entry-form?term=${encodeURIComponent(selectedTerm.value)}` })
 }
 
 function goCatalog() {
-  uni.navigateTo({ url: `/pages/timetable/catalog?term=${encodeURIComponent(selectedTerm.value)}` })
+  uni.navigateTo({ url: `/pages-timetable/catalog?term=${encodeURIComponent(selectedTerm.value)}` })
 }
 
 onLoad((options) => {

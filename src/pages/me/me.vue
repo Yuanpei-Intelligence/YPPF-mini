@@ -187,7 +187,7 @@ usePageRefresh(
 const primaryMenu: MenuItem[] = [
   { key: 'notifications', title: '通知中心', icon: 'i-carbon-notification', onClick: () => uni.navigateTo({ url: '/pages/me/notifications' }) },
   { key: 'timetable', title: '我的课表', icon: 'i-carbon-calendar-heat-map', onClick: () => uni.navigateTo({ url: '/pages/timetable/index' }) },
-  { key: 'grades', title: '我的成绩', icon: 'i-carbon-report', onClick: () => uni.navigateTo({ url: '/pages/timetable/grades' }) },
+  { key: 'grades', title: '我的成绩', icon: 'i-carbon-report', onClick: () => uni.navigateTo({ url: '/pages-timetable/grades' }) },
   { key: 'appointments', title: '我的预约', icon: 'i-carbon-event-schedule', onClick: () => uni.navigateTo({ url: '/pages/me/my-appointments' }) },
   { key: 'violations', title: '信用分记录', icon: 'i-carbon-star', onClick: () => uni.navigateTo({ url: '/pages/me/my-violations' }) },
 ]

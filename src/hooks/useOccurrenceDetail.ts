@@ -103,7 +103,7 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
       params.push(`term=${encodeURIComponent(term)}`)
     if (scope !== 'all')
       params.push(`week=${week}`)
-    uni.navigateTo({ url: `/pages/timetable/entry-form?${params.join('&')}` })
+    uni.navigateTo({ url: `/pages-timetable/entry-form?${params.join('&')}` })
   }
 
   async function setHidden(item: Occurrence, hidden: boolean) {

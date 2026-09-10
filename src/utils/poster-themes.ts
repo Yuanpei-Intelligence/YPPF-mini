@@ -3,7 +3,7 @@ import { PALETTE } from '@/utils/timetable'
 
 /*
  * 课表海报的预设风格：每套的配色、字体与装饰，以及上次选择的本机记忆。
- * 只有数据与纯函数，不含 canvas 绘制（绘制在 pages/timetable/poster.vue）。
+ * 只有数据与纯函数，不含 canvas 绘制（绘制在 pages-timetable/poster.vue）。
  */
 
 export type PosterThemeKey = 'clean' | 'dark' | 'paper' | 'pop'

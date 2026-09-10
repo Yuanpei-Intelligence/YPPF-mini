@@ -23,4 +23,11 @@ export default defineUniPages({
   },
   // tabbar 的配置统一在 “./src/tabbar/config.ts” 文件中
   tabBar: tabBar as any,
+  // WeChat downloads the whole main package before the first render, so the secondary timetable
+  // pages ship as the `pages-timetable` subpackage. Preload it from the timetable on any network
+  // and from the home page (which links into it) on Wi-Fi only.
+  preloadRule: {
+    'pages/timetable/index': { network: 'all', packages: ['pages-timetable'] },
+    'pages/index/index': { network: 'wifi', packages: ['pages-timetable'] },
+  },
 })

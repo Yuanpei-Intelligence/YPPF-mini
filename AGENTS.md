@@ -81,6 +81,7 @@ src/main.ts
 
 - `src/pages/`: main-package pages. File location and `definePage` generate the route.
 - `src/pages-auth/`: authentication subpackage registered in `vite.config.ts`.
+- `src/pages-timetable/`: subpackage for the secondary timetable pages (import, entry form, catalog, grades, poster, day view), registered in `vite.config.ts` and preloaded through `pages.config.ts#preloadRule`. `src/pages/timetable/index.vue` stays in the main package because backend shares, subscribe messages and the mini-program code open `pages/timetable/index`.
 - `src/components/`: reusable business/presentation components, including `ApiFieldError.vue` for field-level backend errors.
 - `src/api/types/`: pure wire-contract types.
 - `src/api/*.ts`: typed endpoint wrappers.
@@ -242,7 +243,7 @@ Success feedback is owned by the initiating UI layer, never by `src/http` or a r
 
 ## Page and routing workflow
 
-1. Put a new main-package page at `src/pages/<domain>/<name>.vue`. Only authentication subpackage pages belong in `src/pages-auth/`.
+1. Put a new main-package page at `src/pages/<domain>/<name>.vue`. Subpackage pages belong only in a registered subpackage root (`src/pages-auth/`, `src/pages-timetable/`). Keep tab pages and any page the backend or a share links to in the main package; a secondary page of a large feature can go to that feature's subpackage.
 2. Use `<script setup lang="ts">` and declare page metadata with `definePage`. Only the actual home page sets `type: 'home'`.
 3. Use leading-slash uni-app routes that match a freshly generated `src/pages.json`. Do not use browser Vue Router APIs.
 4. Use `uni.switchTab` for tabbar pages and `uni.navigateTo`/`redirectTo`/`reLaunch` elsewhere. Let the global interceptor update login and tabbar state.
