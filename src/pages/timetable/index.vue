@@ -33,8 +33,6 @@ import {
 definePage({
   style: {
     navigationBarTitleText: '我的课表',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
     enablePullDownRefresh: true,
   },
 })
@@ -238,21 +236,21 @@ const weekCells = computed<WeekCell[]>(() => {
   return (term.value ? weekPickerItems(term.value) : []).map((item) => {
     const isCurrent = item.week === current
     const isShown = item.week === shown
-    let cellClass = 'border-gray-100 bg-gray-50 text-gray-800'
+    let cellClass = 'border-line-light bg-page text-fg-1'
     if (isCurrent)
-      cellClass = isShown ? 'border-blue-300 bg-blue-600 text-white' : 'border-blue-600 bg-blue-600 text-white'
+      cellClass = isShown ? 'border-primary-disabled bg-primary text-white' : 'border-primary bg-primary text-white'
     else if (isShown)
-      cellClass = 'border-blue-500 bg-blue-50 text-blue-700'
+      cellClass = 'border-primary bg-primary-light text-primary-dark'
     const examOnly = !item.suspended && item.exam
-    let markClass = examOnly ? 'text-amber-600' : 'text-red-500'
+    let markClass = examOnly ? 'text-warning' : 'text-error'
     if (isCurrent)
-      markClass = examOnly ? 'text-amber-200' : 'text-red-200'
+      markClass = examOnly ? 'text-warning-light' : 'text-error-light'
     return {
       ...item,
       cellClass,
-      rangeClass: isCurrent ? 'text-blue-100' : 'text-gray-400',
+      rangeClass: isCurrent ? 'text-primary-light' : 'text-fg-3',
       markClass,
-      dotClass: examOnly ? 'bg-amber-500' : 'bg-red-500',
+      dotClass: examOnly ? 'bg-warning' : 'bg-error',
     }
   })
 })
@@ -442,50 +440,50 @@ onShareAppMessage(() => ({
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-24">
+  <view class="min-h-screen bg-page pb-24">
     <uv-toast ref="toastRef" />
     <!-- 学期 + 周切换 -->
-    <view class="sticky top-0 z-10 bg-white px-3 py-2 shadow-sm">
+    <view class="sticky top-0 z-10 bg-card px-3 py-2 shadow-card">
       <view class="flex items-center justify-between gap-2">
         <view class="min-w-0 flex-1">
-          <text class="block truncate text-sm text-gray-800 font-medium">{{ term?.name || '课表' }}</text>
-          <view class="flex items-center gap-1 text-2xs text-gray-400">
+          <text class="block truncate text-sm text-fg-1 font-medium">{{ term?.name || '课表' }}</text>
+          <view class="flex items-center gap-1 text-2xs text-fg-3">
             <text>{{ weekRangeLabel }}</text>
-            <text v-if="weekMark" class="rounded bg-red-50 px-1 text-3xs text-red-500">{{ weekMark }}</text>
+            <text v-if="weekMark" class="rounded-sm bg-error-light px-1 text-2xs text-error">{{ weekMark }}</text>
             <text v-if="loading && view">· 更新中…</text>
           </view>
         </view>
         <view class="flex shrink-0 items-center">
           <view
-            class="rounded-full p-1.5 active:bg-gray-100"
+            class="rounded-full p-1.5 active:bg-fill"
             :class="{ 'opacity-30': !canPrev }"
             @click="goWeek(-1)"
           >
-            <view class="i-carbon-chevron-left text-lg text-gray-600" />
+            <view class="i-carbon-chevron-left text-lg text-fg-2" />
           </view>
           <view
-            class="min-w-14 flex items-center justify-center text-sm text-gray-800 font-bold active:opacity-60"
+            class="min-w-14 flex items-center justify-center text-sm text-fg-1 font-bold active:opacity-60"
             @click="openWeekPicker"
           >
             <text>{{ view ? `第 ${view.week} 周` : '—' }}</text>
-            <view v-if="view" class="i-carbon-chevron-down ml-0.5 text-xs text-gray-400" />
+            <view v-if="view" class="i-carbon-chevron-down ml-0.5 text-xs text-fg-3" />
           </view>
           <view
-            class="rounded-full p-1.5 active:bg-gray-100"
+            class="rounded-full p-1.5 active:bg-fill"
             :class="{ 'opacity-30': !canNext }"
             @click="goWeek(1)"
           >
-            <view class="i-carbon-chevron-right text-lg text-gray-600" />
+            <view class="i-carbon-chevron-right text-lg text-fg-2" />
           </view>
           <view
             v-if="view && !isCurrentWeek"
-            class="ml-1 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-600 active:bg-blue-100"
+            class="ml-1 rounded-full bg-primary-light px-2 py-1 text-xs text-primary active:opacity-70"
             @click="goCurrentWeek"
           >
             本周
           </view>
           <view
-            class="ml-1 rounded-full p-1.5 text-blue-600 active:bg-blue-50"
+            class="ml-1 rounded-full p-1.5 text-primary active:bg-primary-light"
             :class="{ 'opacity-50': syncing }"
             @click="handleSync"
           >
@@ -496,37 +494,33 @@ onShareAppMessage(() => ({
     </view>
 
     <!-- 首次加载 / 加载失败 -->
-    <view v-if="!view && loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
-      <uv-loading-icon mode="circle" />
-      <text class="mt-3">正在加载课表…</text>
-    </view>
-    <view v-else-if="!view && loadError" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-warning-alt mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="loadWeek(selected)">
-        重试
-      </button>
-    </view>
+    <PageState
+      v-if="!view && (loading || loadError)"
+      :loading="loading"
+      :error="loadError"
+      loading-text="正在加载课表…"
+      @retry="loadWeek(selected)"
+    />
 
     <!-- 周视图网格 -->
-    <view v-else-if="view" class="mx-2 mt-2 overflow-hidden rounded-xl bg-white shadow-sm">
-      <view class="flex border-b border-gray-100">
+    <view v-else-if="view" class="mx-2 mt-2 overflow-hidden rounded-lg bg-card shadow-card">
+      <view class="flex border-b border-line-light">
         <view class="w-11 shrink-0" />
         <view
           v-for="(day, index) in dayColumns"
           :key="index"
-          class="flex-1 py-1 text-center active:bg-gray-100"
-          :class="day.today ? 'bg-blue-50' : day.suspended ? CALENDAR_SHADE_CLASS : ''"
+          class="flex-1 py-1 text-center active:bg-fill"
+          :class="day.today ? 'bg-primary-light' : day.suspended ? CALENDAR_SHADE_CLASS : ''"
           @click="goDay(index)"
         >
-          <text class="block text-xs" :class="day.today ? 'text-blue-600 font-bold' : 'text-gray-600'">
+          <text class="block text-xs" :class="day.today ? 'text-primary font-bold' : 'text-fg-2'">
             周{{ day.weekday }}
           </text>
-          <text class="block text-3xs" :class="day.today ? 'text-blue-500' : 'text-gray-400'">
+          <text class="block text-2xs" :class="day.today ? 'text-primary' : 'text-fg-3'">
             {{ day.date }}
           </text>
           <!-- 校历标签行常驻占位，表头高度不随周次变化 -->
-          <text class="block min-h-26rpx truncate px-0.5 text-3xs" :class="day.labelClass">
+          <text class="block min-h-26rpx truncate px-0.5 text-2xs" :class="day.labelClass">
             {{ day.label }}
           </text>
         </view>
@@ -537,12 +531,12 @@ onShareAppMessage(() => ({
           <view
             v-for="row in rows"
             :key="row.section"
-            class="flex flex-col items-center justify-center border-b border-gray-50"
+            class="flex flex-col items-center justify-center border-b border-line-light"
             :style="{ height: `${ROW_HEIGHT}rpx` }"
           >
-            <text class="text-xs text-gray-700 font-medium">{{ row.section }}</text>
-            <text class="text-3xs text-gray-400">{{ row.start }}</text>
-            <text class="text-3xs text-gray-400">{{ row.end }}</text>
+            <text class="text-xs text-fg-2 font-medium">{{ row.section }}</text>
+            <text class="text-2xs text-fg-3">{{ row.start }}</text>
+            <text class="text-2xs text-fg-3">{{ row.end }}</text>
           </view>
         </view>
 
@@ -555,12 +549,12 @@ onShareAppMessage(() => ({
             :class="day.suspended ? CALENDAR_SHADE_CLASS : ''"
             :style="columnStyle(index)"
           >
-            <view v-if="day.today" class="absolute inset-0 bg-blue-50 opacity-50" />
+            <view v-if="day.today" class="absolute inset-0 bg-primary-light opacity-50" />
           </view>
           <view
             v-for="(row, rowIndex) in rows"
             :key="`row-${row.section}`"
-            class="absolute left-0 right-0 border-b border-gray-50"
+            class="absolute left-0 right-0 border-b border-line-light"
             :style="{ top: `${(rowIndex + 1) * ROW_HEIGHT - 1}rpx` }"
           />
 
@@ -579,7 +573,7 @@ onShareAppMessage(() => ({
             >
               <text v-if="block.audit" class="grid-block__audit">{{ AUDIT_BADGE }}</text>{{ block.occurrence.title }}
             </text>
-            <text v-if="block.occurrence.location" class="mt-0.5 block truncate text-3xs opacity-80">
+            <text v-if="block.occurrence.location" class="mt-0.5 block truncate text-2xs opacity-80">
               {{ block.occurrence.location }}
             </text>
             <text v-if="block.tag" class="grid-block__tag">{{ block.tag }}</text>
@@ -590,13 +584,13 @@ onShareAppMessage(() => ({
             v-if="visibleOccurrences.length === 0"
             class="absolute inset-0 flex flex-col items-center justify-center"
           >
-            <text class="i-carbon-calendar text-4xl text-gray-200" />
-            <text class="mt-2 text-sm text-gray-400">
+            <text class="i-carbon-calendar text-4xl text-fg-4" />
+            <text class="mt-2 text-sm text-fg-3">
               {{ emptyText }}
             </text>
             <button
               v-if="termHasEntries === false"
-              class="mt-4 rounded-full bg-blue-600 px-5 py-1.5 text-sm text-white"
+              class="btn-primary mt-4 btn-sm"
               @click="goImport()"
             >
               导入课表
@@ -606,32 +600,32 @@ onShareAppMessage(() => ({
       </view>
     </view>
 
-    <view v-if="view && sourceLegend" class="mx-4 mt-2 text-2xs text-gray-400">
+    <view v-if="view && sourceLegend" class="mx-4 mt-2 text-2xs text-fg-3">
       来源：{{ sourceLegend }}
     </view>
 
     <!-- 底部操作栏 -->
-    <view class="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-100 bg-white pb-safe">
+    <view class="fixed bottom-0 left-0 right-0 z-20 bg-card shadow-float pb-safe">
       <view class="flex">
-        <view class="flex flex-1 flex-col items-center py-2 active:bg-gray-50" @click="openAddSheet">
-          <view class="i-carbon-add text-xl text-blue-600" />
-          <text class="mt-0.5 text-xs text-gray-600">添加</text>
+        <view class="flex flex-1 flex-col items-center py-2 active:bg-fill" @click="openAddSheet">
+          <view class="i-carbon-add text-xl text-fg-2" />
+          <text class="mt-0.5 text-xs text-fg-2">添加</text>
         </view>
-        <view class="flex flex-1 flex-col items-center py-2 active:bg-gray-50" @click="goImport()">
-          <view class="i-carbon-cloud-download text-xl text-blue-600" />
-          <text class="mt-0.5 text-xs text-gray-600">导入</text>
+        <view class="flex flex-1 flex-col items-center py-2 active:bg-fill" @click="goImport()">
+          <view class="i-carbon-cloud-download text-xl text-fg-2" />
+          <text class="mt-0.5 text-xs text-fg-2">导入</text>
         </view>
-        <view class="flex flex-1 flex-col items-center py-2 active:bg-gray-50" @click="goGrades">
-          <view class="i-carbon-report text-xl text-blue-600" />
-          <text class="mt-0.5 text-xs text-gray-600">成绩</text>
+        <view class="flex flex-1 flex-col items-center py-2 active:bg-fill" @click="goGrades">
+          <view class="i-carbon-report text-xl text-fg-2" />
+          <text class="mt-0.5 text-xs text-fg-2">成绩</text>
         </view>
-        <view class="flex flex-1 flex-col items-center py-2 active:bg-gray-50" @click="goPoster">
-          <view class="i-carbon-image text-xl text-blue-600" />
-          <text class="mt-0.5 text-xs text-gray-600">海报</text>
+        <view class="flex flex-1 flex-col items-center py-2 active:bg-fill" @click="goPoster">
+          <view class="i-carbon-image text-xl text-fg-2" />
+          <text class="mt-0.5 text-xs text-fg-2">海报</text>
         </view>
-        <view class="flex flex-1 flex-col items-center py-2 active:bg-gray-50" @click="goImport('settings')">
-          <view class="i-carbon-settings text-xl text-blue-600" />
-          <text class="mt-0.5 text-xs text-gray-600">设置</text>
+        <view class="flex flex-1 flex-col items-center py-2 active:bg-fill" @click="goImport('settings')">
+          <view class="i-carbon-settings text-xl text-fg-2" />
+          <text class="mt-0.5 text-xs text-fg-2">设置</text>
         </view>
       </view>
     </view>
@@ -665,12 +659,12 @@ onShareAppMessage(() => ({
     <view v-if="view" class="px-4 pb-4 pt-5">
       <view class="flex items-center justify-between gap-2">
         <view class="min-w-0 flex-1">
-          <text class="block text-base text-gray-900 font-bold">选择周次</text>
-          <text class="block truncate text-xs text-gray-400">{{ view.term.name }} · 共 {{ view.term.total_weeks }} 周</text>
+          <text class="block text-base text-fg-1 font-bold">选择周次</text>
+          <text class="block truncate text-xs text-fg-3">{{ view.term.name }} · 共 {{ view.term.total_weeks }} 周</text>
         </view>
         <view
           v-if="view.today.week"
-          class="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-600 active:bg-blue-100"
+          class="shrink-0 rounded-full bg-primary-light px-3 py-1 text-xs text-primary active:opacity-70"
           @click="pickWeek(view.today.week)"
         >
           回到本周
@@ -680,34 +674,34 @@ onShareAppMessage(() => ({
         <view class="flex flex-wrap -mx-1">
           <view v-for="cell in weekCells" :key="cell.week" class="w-1/4 px-1 pb-2">
             <view
-              class="relative border-2 rounded-xl px-1 py-2 text-center"
+              class="relative border-2 rounded-lg px-1 py-2 text-center"
               :class="cell.cellClass"
               @click="pickWeek(cell.week)"
             >
               <text class="block text-sm font-medium">第 {{ cell.week }} 周</text>
-              <text class="block text-3xs" :class="cell.rangeClass">{{ cell.range }}</text>
+              <text class="block text-2xs" :class="cell.rangeClass">{{ cell.range }}</text>
               <!-- 标记行常驻占位，每格高度一致 -->
-              <text class="block min-h-26rpx truncate text-3xs" :class="cell.markClass">{{ cell.label }}</text>
+              <text class="block min-h-26rpx truncate text-2xs" :class="cell.markClass">{{ cell.label }}</text>
               <view v-if="cell.label" class="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full" :class="cell.dotClass" />
             </view>
           </view>
         </view>
       </scroll-view>
-      <view class="mt-1 flex items-center gap-4 text-2xs text-gray-400">
+      <view class="mt-1 flex items-center gap-4 text-2xs text-fg-3">
         <view class="flex items-center gap-1">
-          <view class="h-2.5 w-2.5 rounded-sm bg-blue-600" />
+          <view class="h-2.5 w-2.5 rounded-sm bg-primary" />
           <text>本周</text>
         </view>
         <view class="flex items-center gap-1">
-          <view class="h-2.5 w-2.5 border-2 border-blue-500 rounded-sm" />
+          <view class="h-2.5 w-2.5 border-2 border-primary rounded-sm" />
           <text>正在显示</text>
         </view>
         <view class="flex items-center gap-1">
-          <view class="h-1.5 w-1.5 rounded-full bg-red-500" />
+          <view class="h-1.5 w-1.5 rounded-full bg-error" />
           <text>放假 / 停课</text>
         </view>
         <view class="flex items-center gap-1">
-          <view class="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          <view class="h-1.5 w-1.5 rounded-full bg-warning" />
           <text>考试周</text>
         </view>
       </view>
@@ -736,11 +730,11 @@ onShareAppMessage(() => ({
   display: inline-block;
   padding: 0 4rpx;
   margin-right: 4rpx;
-  font-size: 16rpx;
-  line-height: 22rpx;
-  color: #fff;
+  font-size: 20rpx;
+  line-height: 24rpx;
+  color: var(--yp-text-inverse);
   vertical-align: 2rpx;
-  background: #d97706;
+  background: var(--yp-color-warning);
   border-radius: 4rpx;
 }
 
@@ -750,7 +744,7 @@ onShareAppMessage(() => ({
   right: 6rpx;
   width: 10rpx;
   height: 10rpx;
-  background: #d97706;
+  background: var(--yp-color-warning);
   border-radius: 50%;
 }
 
@@ -760,8 +754,8 @@ onShareAppMessage(() => ({
   padding: 0 6rpx;
   margin-top: 4rpx;
   overflow: hidden;
-  font-size: 16rpx;
-  line-height: 24rpx;
+  font-size: 20rpx;
+  line-height: 26rpx;
   text-overflow: ellipsis;
   white-space: nowrap;
   background: rgba(255, 255, 255, 0.6);
@@ -773,14 +767,10 @@ onShareAppMessage(() => ({
   right: 4rpx;
   bottom: 4rpx;
   padding: 0 6rpx;
-  font-size: 18rpx;
+  font-size: 20rpx;
   line-height: 26rpx;
-  color: #fff;
-  border-radius: 6rpx;
+  color: var(--yp-text-inverse);
+  border-radius: var(--yp-radius-sm);
   opacity: 0.85;
-}
-
-button::after {
-  border: none;
 }
 </style>

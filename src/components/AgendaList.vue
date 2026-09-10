@@ -2,20 +2,21 @@
 import type { AgendaDay } from '@/api/types/agenda'
 import type { Occurrence } from '@/api/types/timetable'
 import { computed } from 'vue'
+import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import {
   AUDIT_BADGE,
   calendarLabelClass,
   clockOf,
   colorForOccurrence,
   KIND_BADGES,
-  shortDate,
   STATUS_LABELS,
   suspendsClasses,
   WEEKDAY_LABELS,
 } from '@/utils/timetable'
 
 /*
- * 按日期分组的日程列表（首页「我的日程」等处使用）。
+ * 按日期分组的日程时间线（首页「我的日程」等处使用）。
  * 只负责展示：不请求数据、不知道路由；点击日期头和日程行分别通过 openDay / select 交给父页面处理。
  */
 
@@ -25,9 +26,12 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   /** “今天”的 ISO 日期，用来标出 今天 / 明天 / 后天；缺省取本机日期 */
   today?: string
+  /** 没有任何日程时的空态文案 */
+  emptyText?: string
 }>(), {
   loading: false,
   today: '',
+  emptyText: '这几天没有日程',
 })
 
 const emit = defineEmits<{
@@ -40,8 +44,8 @@ interface AgendaRow {
   /** HH:MM */
   start: string
   end: string
-  /** 左侧色条，颜色与课表页同一门课一致 */
-  barStyle: string
+  /** 来源色点，颜色与课表页同一门课一致 */
+  pipStyle: string
   /** 书院课 / 活动 / 预约 / 考试；学校课程与自定义条目不打标 */
   badge: string
   badgeStyle: string
@@ -61,11 +65,10 @@ interface AgendaGroup {
   /** 今天 / 明天 / 后天；其它日期为空串 */
   relative: string
   today: boolean
-  /** M/D */
-  short: string
-  /** 周三 */
-  weekday: string
-  week: number | null
+  /** 大号日数字 */
+  dayNumber: string
+  /** 9月 · 周四 · 第 1 周 */
+  caption: string
   /** 校历标签，如“放假”“按周一”；没有则为空串 */
   label: string
   labelClass: string
@@ -77,9 +80,9 @@ interface AgendaGroup {
 const RELATIVE_LABELS = ['今天', '明天', '后天']
 
 const STATUS_CLASSES: Record<string, string> = {
-  canceled: 'text-red-400',
-  checked_in: 'text-green-600',
-  applied: 'text-blue-500',
+  canceled: 'text-error',
+  checked_in: 'text-success',
+  applied: 'text-primary',
 }
 
 function localIsoDate(): string {
@@ -90,17 +93,17 @@ function localIsoDate(): string {
 }
 
 /** `YYYY-MM-DD` -> 自 1970-01-01 起的天数；无法解析时为 NaN */
-function dayNumber(iso: string): number {
+function dayNumberOf(iso: string): number {
   const [year, month, day] = iso.split('-').map(part => Number(part))
   if (!year || !month || !day)
     return Number.NaN
   return Math.round(Date.UTC(year, month - 1, day) / 86400000)
 }
 
-const todayNumber = computed(() => dayNumber(props.today || localIsoDate()))
+const todayNumber = computed(() => dayNumberOf(props.today || localIsoDate()))
 
 function relativeLabel(iso: string): string {
-  const diff = dayNumber(iso) - todayNumber.value
+  const diff = dayNumberOf(iso) - todayNumber.value
   return Number.isNaN(diff) ? '' : RELATIVE_LABELS[diff] ?? ''
 }
 
@@ -110,11 +113,11 @@ function toRow(occurrence: Occurrence): AgendaRow {
     occurrence,
     start: clockOf(occurrence.start),
     end: clockOf(occurrence.end),
-    barStyle: `background-color: ${color.fg}`,
+    pipStyle: `background-color: ${color.fg}`,
     badge: KIND_BADGES[occurrence.kind] ?? '',
     badgeStyle: `background-color: ${color.bg}; color: ${color.fg}`,
     status: STATUS_LABELS[occurrence.status] ?? '',
-    statusClass: STATUS_CLASSES[occurrence.status] ?? 'text-gray-400',
+    statusClass: STATUS_CLASSES[occurrence.status] ?? 'text-fg-3',
     canceled: occurrence.status === 'canceled',
     meta: [occurrence.location, occurrence.subtitle].filter(Boolean).join(' · '),
     audit: occurrence.role === 'audit',
@@ -123,15 +126,28 @@ function toRow(occurrence: Occurrence): AgendaRow {
   }
 }
 
+/** `YYYY-MM-DD` -> { month: '9月', day: '10' }；无法解析时 day 为原串 */
+function splitDate(iso: string): { month: string, day: string } {
+  const [, month, day] = iso.split('-')
+  if (!month || !day)
+    return { month: '', day: iso }
+  return { month: `${Number(month)}月`, day: String(Number(day)) }
+}
+
 const groups = computed<AgendaGroup[]>(() => props.days.map((day) => {
   const relative = relativeLabel(day.date)
+  const { month, day: dayNumber } = splitDate(day.date)
+  const caption = [
+    month,
+    `周${WEEKDAY_LABELS[day.weekday - 1] ?? ''}`,
+    day.week ? `第 ${day.week} 周` : '',
+  ].filter(Boolean).join(' · ')
   return {
     date: day.date,
     relative,
     today: relative === RELATIVE_LABELS[0],
-    short: shortDate(day.date),
-    weekday: `周${WEEKDAY_LABELS[day.weekday - 1] ?? ''}`,
-    week: day.week,
+    dayNumber,
+    caption,
     label: day.label ?? '',
     labelClass: calendarLabelClass(day.kind),
     suspended: suspendsClasses(day.kind),
@@ -145,85 +161,72 @@ const isEmpty = computed(() => props.days.every(day => day.occurrences.length ==
 </script>
 
 <template>
-  <view>
-    <view v-if="loading && days.length === 0" class="flex items-center justify-center py-8 text-xs text-gray-400">
-      加载日程中…
-    </view>
-    <view v-else-if="isEmpty" class="py-8">
-      <slot name="empty">
-        <view class="flex flex-col items-center text-gray-400">
-          <text class="i-carbon-calendar text-4xl text-gray-200" />
-          <text class="mt-2 text-sm">这几天没有日程</text>
-        </view>
-      </slot>
-    </view>
-    <view v-else class="mt-1">
-      <view v-for="group in groups" :key="group.date" class="mb-3">
-        <!-- 日期头：点击进入当天的日视图 -->
-        <view class="flex items-center gap-2 py-1.5 active:opacity-70" @click="emit('openDay', group.date)">
+  <PageState :loading="loading && days.length === 0" :empty="isEmpty" :empty-text="emptyText" empty-icon="i-carbon-calendar" compact>
+    <template #action>
+      <slot name="empty-action" />
+    </template>
+    <view>
+      <view v-for="group in groups" :key="group.date" class="mt-4">
+        <!-- 日期头：大号日数字 + 月份/星期/周次；点击进入当天的日视图 -->
+        <view class="flex items-end gap-3 px-1 py-2 active:opacity-70" @click="emit('openDay', group.date)">
           <text
-            v-if="group.relative"
-            class="rounded-full px-2 py-0.5 text-2xs font-medium"
-            :class="group.today ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-600'"
+            class="text-3xl font-semibold leading-none tabular-nums"
+            :class="group.today ? 'text-primary' : 'text-fg-1'"
           >
-            {{ group.relative }}
+            {{ group.dayNumber }}
           </text>
-          <text class="text-sm font-medium" :class="group.today ? 'text-blue-700' : 'text-gray-800'">
-            {{ group.short }} {{ group.weekday }}
-          </text>
-          <text v-if="group.week" class="text-2xs text-gray-400">第 {{ group.week }} 周</text>
-          <text v-if="group.label" class="truncate text-2xs" :class="group.labelClass">{{ group.label }}</text>
-          <view class="flex-1" />
-          <view class="i-carbon-chevron-right text-sm text-gray-300" />
+          <view class="min-w-0 flex flex-1 flex-col gap-1 pb-1">
+            <view class="flex items-center gap-2">
+              <StatusTag v-if="group.relative" :type="group.today ? 'processing' : 'default'" :text="group.relative" />
+              <text v-if="group.label" class="truncate text-2xs" :class="group.labelClass">{{ group.label }}</text>
+            </view>
+            <text class="truncate text-xs text-fg-3">{{ group.caption }}</text>
+          </view>
+          <view class="i-carbon-chevron-right mb-1 text-base text-fg-4" />
         </view>
 
-        <view v-if="group.rows.length" class="overflow-hidden rounded-xl bg-white shadow-sm">
-          <view
-            v-for="(row, index) in group.rows"
-            :key="row.occurrence.id"
-            class="flex items-stretch gap-3 px-3 py-2.5 active:bg-gray-50"
-            :class="{ 'border-b border-gray-50': index < group.rows.length - 1 }"
-            @click="emit('select', row.occurrence)"
-          >
-            <view class="w-11 shrink-0 text-center">
-              <text class="block text-sm text-gray-800 font-medium">{{ row.start }}</text>
-              <text class="block text-2xs text-gray-400">{{ row.end }}</text>
-            </view>
-            <view class="w-1 shrink-0 rounded-full" :style="row.barStyle" />
-            <view class="min-w-0 flex-1">
-              <view class="flex items-center gap-1.5">
-                <text
-                  class="min-w-0 flex-1 truncate text-sm font-medium"
-                  :class="[row.canceled ? 'line-through text-gray-400' : row.exam ? 'text-red-700' : 'text-gray-900']"
-                >
-                  {{ row.occurrence.title }}
-                </text>
-                <text v-if="row.audit" class="shrink-0 rounded bg-amber-500 px-1 py-0.5 text-3xs text-white">
-                  {{ AUDIT_BADGE }}
-                </text>
-                <text v-if="row.tag" class="max-w-24 shrink-0 truncate rounded bg-gray-100 px-1.5 py-0.5 text-3xs text-gray-600">
-                  {{ row.tag }}
-                </text>
-                <text v-if="row.badge" class="shrink-0 rounded px-1.5 py-0.5 text-3xs" :style="row.badgeStyle">
-                  {{ row.badge }}
-                </text>
+        <view v-if="group.rows.length" class="overflow-hidden rounded-lg bg-card">
+          <template v-for="(row, index) in group.rows" :key="row.occurrence.id">
+            <view v-if="index > 0" class="yp-divider" />
+            <view
+              class="flex items-start gap-3 px-4 py-3 active:bg-fill"
+              @click="emit('select', row.occurrence)"
+            >
+              <!-- 时间列：等宽数字，起止上下排列 -->
+              <view class="w-88rpx shrink-0 pt-0.5">
+                <text class="block text-sm text-fg-1 font-medium leading-tight tabular-nums">{{ row.start }}</text>
+                <text class="mt-1 block text-2xs text-fg-3 leading-tight tabular-nums">{{ row.end }}</text>
               </view>
-              <text v-if="row.meta" class="mt-0.5 block truncate text-xs text-gray-500">{{ row.meta }}</text>
-              <text v-if="row.status" class="mt-0.5 block text-2xs" :class="row.statusClass">{{ row.status }}</text>
+              <!-- 来源色点，同一门课与课表页同色 -->
+              <view class="mt-2.5 h-14rpx w-14rpx shrink-0 rounded-full" :style="row.pipStyle" />
+              <view class="min-w-0 flex-1">
+                <view class="flex items-center gap-2">
+                  <text
+                    class="min-w-0 flex-1 truncate text-base font-medium"
+                    :class="[row.canceled ? 'line-through text-fg-3' : row.exam ? 'text-error-dark' : 'text-fg-1']"
+                  >
+                    {{ row.occurrence.title }}
+                  </text>
+                  <text v-if="row.audit" class="shrink-0 rounded-sm bg-warning px-1 text-2xs text-white leading-relaxed">
+                    {{ AUDIT_BADGE }}
+                  </text>
+                  <text v-if="row.tag" class="max-w-24 shrink-0 truncate rounded-sm bg-fill px-1.5 text-2xs text-fg-2 leading-relaxed">
+                    {{ row.tag }}
+                  </text>
+                  <text v-if="row.badge" class="shrink-0 rounded-sm px-1.5 text-2xs leading-relaxed" :style="row.badgeStyle">
+                    {{ row.badge }}
+                  </text>
+                </view>
+                <text v-if="row.meta" class="mt-0.5 block truncate text-xs text-fg-3">{{ row.meta }}</text>
+                <text v-if="row.status" class="mt-0.5 block text-2xs" :class="row.statusClass">{{ row.status }}</text>
+              </view>
             </view>
-          </view>
+          </template>
         </view>
-        <view
-          v-else
-          class="rounded-xl bg-white px-3 py-2.5 text-xs shadow-sm"
-          :class="group.suspended ? 'text-gray-300' : 'text-gray-400'"
-        >
-          没有日程
+        <view v-else class="rounded-lg bg-card px-4 py-3 text-xs text-fg-3">
+          {{ group.suspended ? (group.label || '停课') : '没有日程' }}
         </view>
       </view>
     </view>
-  </view>
+  </PageState>
 </template>
-
-<style lang="scss" scoped>
-</style>

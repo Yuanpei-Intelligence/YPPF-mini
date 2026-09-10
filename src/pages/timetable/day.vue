@@ -34,8 +34,6 @@ import {
 definePage({
   style: {
     navigationBarTitleText: '日程',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
     enablePullDownRefresh: true,
   },
 })
@@ -146,7 +144,7 @@ const examWeek = computed(() => inTerm.value && isExamWeek(term.value, target.va
 const headline = computed(() => {
   const parts = [`${chineseDate(date.value)} 周${WEEKDAY_LABELS[weekdayOf(date.value) - 1] ?? ''}`]
   if (inTerm.value && target.value)
-    parts.push(`第${target.value.week}周`)
+    parts.push(`第 ${target.value.week} 周`)
   return parts.join(' · ')
 })
 
@@ -155,12 +153,12 @@ const subline = computed(() => {
   if (calendarLabel.value)
     return { text: calendarLabel.value, cls: calendarClass.value }
   if (noTerm.value)
-    return { text: '暂无可用学期', cls: 'text-gray-400' }
+    return { text: '暂无可用学期', cls: 'text-fg-3' }
   if (termsOut.value && !inTerm.value)
-    return { text: '不在学期教学周内', cls: 'text-gray-400' }
+    return { text: '不在学期教学周内', cls: 'text-fg-3' }
   if (examWeek.value)
-    return { text: `${EXAM_WEEK_LABEL} · ${term.value?.name ?? ''}`, cls: 'text-amber-600' }
-  return { text: term.value?.name ?? '', cls: 'text-gray-400' }
+    return { text: `${EXAM_WEEK_LABEL} · ${term.value?.name ?? ''}`, cls: 'text-warning' }
+  return { text: term.value?.name ?? '', cls: 'text-fg-3' }
 })
 
 const rows = computed<DayRow[]>(() => {
@@ -301,27 +299,27 @@ onPullDownRefresh(async () => {
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-10" @touchstart="onTouchStart" @touchend="onTouchEnd">
+  <view class="min-h-screen bg-page pb-10" @touchstart="onTouchStart" @touchend="onTouchEnd">
     <uv-toast ref="toastRef" />
     <!-- 日期头 -->
-    <view class="sticky top-0 z-10 bg-white px-3 py-2 shadow-sm">
+    <view class="sticky top-0 z-10 bg-card px-3 py-2 shadow-card">
       <view class="flex items-center gap-1">
-        <view class="shrink-0 rounded-full p-1.5 active:bg-gray-100" @click="goDay(-1)">
-          <view class="i-carbon-chevron-left text-lg text-gray-600" />
+        <view class="shrink-0 rounded-full p-1.5 active:bg-fill" @click="goDay(-1)">
+          <view class="i-carbon-chevron-left text-lg text-fg-2" />
         </view>
         <view class="min-w-0 flex-1 text-center">
-          <text class="block text-base text-gray-900 font-bold">{{ headline }}</text>
+          <text class="block text-base text-fg-1 font-bold">{{ headline }}</text>
           <!-- 副标题行常驻占位，标题不随内容跳动 -->
           <text class="block min-h-28rpx truncate text-2xs" :class="subline.cls">
             {{ subline.text }}<text v-if="loading && ready"> · 更新中…</text>
           </text>
         </view>
-        <view class="shrink-0 rounded-full p-1.5 active:bg-gray-100" @click="goDay(1)">
-          <view class="i-carbon-chevron-right text-lg text-gray-600" />
+        <view class="shrink-0 rounded-full p-1.5 active:bg-fill" @click="goDay(1)">
+          <view class="i-carbon-chevron-right text-lg text-fg-2" />
         </view>
         <view
           v-if="!isToday"
-          class="ml-1 shrink-0 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-600 active:bg-blue-100"
+          class="ml-1 shrink-0 rounded-full bg-primary-light px-2 py-1 text-xs text-primary active:opacity-70"
           @click="goToday"
         >
           回到今天
@@ -330,23 +328,19 @@ onPullDownRefresh(async () => {
     </view>
 
     <!-- 首次加载 / 换周加载 / 加载失败 -->
-    <view v-if="!ready && loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
-      <uv-loading-icon mode="circle" />
-      <text class="mt-3">正在加载…</text>
-    </view>
-    <view v-else-if="!ready && loadError" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-warning-alt mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="ensureView()">
-        重试
-      </button>
-    </view>
+    <PageState
+      v-if="!ready && (loading || loadError)"
+      :loading="loading"
+      :error="loadError"
+      loading-text="正在加载…"
+      @retry="ensureView()"
+    />
 
     <!-- 当天日程 -->
     <template v-else-if="ready || noTerm">
       <view v-if="rows.length === 0" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-        <text class="i-carbon-calendar text-4xl text-gray-200" />
-        <text class="mt-2 text-sm leading-6" :class="dayOff ? calendarClass : 'text-gray-400'">
+        <text class="i-carbon-calendar text-4xl text-fg-4" />
+        <text class="mt-2 text-sm leading-6" :class="dayOff ? calendarClass : 'text-fg-3'">
           {{ emptyText }}
         </text>
       </view>
@@ -354,48 +348,48 @@ onPullDownRefresh(async () => {
         <view
           v-for="row in rows"
           :key="row.occurrence.id"
-          class="mb-3 flex overflow-hidden rounded-xl shadow-sm active:bg-gray-50"
-          :class="[row.hidden ? 'opacity-50' : '', row.exam ? 'bg-red-50' : 'bg-white']"
+          class="mb-3 flex overflow-hidden rounded-lg shadow-card active:bg-fill"
+          :class="[row.hidden ? 'opacity-50' : '', row.exam ? 'bg-error-light' : 'bg-card']"
           @click="openDetail(row.occurrence)"
         >
           <view class="w-1.5 shrink-0" :style="{ backgroundColor: row.color.fg }" />
           <view class="w-20 shrink-0 py-3 pl-3">
-            <text class="block text-sm text-gray-900 font-medium">{{ row.start }}</text>
-            <text class="block text-xs text-gray-400">{{ row.end }}</text>
-            <text v-if="row.sections" class="mt-1 block text-3xs text-gray-400">{{ row.sections }}</text>
+            <text class="block text-sm text-fg-1 font-medium">{{ row.start }}</text>
+            <text class="block text-xs text-fg-3">{{ row.end }}</text>
+            <text v-if="row.sections" class="mt-1 block text-2xs text-fg-3">{{ row.sections }}</text>
           </view>
           <view class="min-w-0 flex-1 py-3 pr-3">
             <view class="flex items-start gap-2">
               <text
                 class="min-w-0 flex-1 text-sm font-medium leading-5"
-                :class="[row.occurrence.status === 'canceled' ? 'line-through text-gray-400' : row.exam ? 'text-red-700' : 'text-gray-900']"
+                :class="[row.occurrence.status === 'canceled' ? 'line-through text-fg-3' : row.exam ? 'text-error-dark' : 'text-fg-1']"
               >
                 {{ row.occurrence.title }}
               </text>
               <text
                 v-if="row.audit"
-                class="shrink-0 rounded bg-amber-500 px-1.5 text-3xs text-white leading-5"
+                class="shrink-0 rounded-sm bg-warning px-1.5 text-2xs text-white leading-5"
               >
                 {{ AUDIT_BADGE }}
               </text>
               <text
                 v-if="row.badge"
-                class="shrink-0 rounded px-1.5 text-3xs text-white leading-5"
+                class="shrink-0 rounded-sm px-1.5 text-2xs text-white leading-5"
                 :style="{ backgroundColor: row.color.fg }"
               >
                 {{ row.badge }}
               </text>
             </view>
-            <text v-if="row.occurrence.subtitle" class="mt-1 block text-xs text-gray-500">{{ row.occurrence.subtitle }}</text>
-            <view v-if="row.occurrence.location" class="mt-1 flex items-center text-xs text-gray-500">
-              <text class="i-carbon-location mr-1 shrink-0 text-sm text-gray-400" />
+            <text v-if="row.occurrence.subtitle" class="mt-1 block text-xs text-fg-2">{{ row.occurrence.subtitle }}</text>
+            <view v-if="row.occurrence.location" class="mt-1 flex items-center text-xs text-fg-2">
+              <text class="i-carbon-location mr-1 shrink-0 text-sm text-fg-3" />
               <text class="min-w-0 flex-1 truncate">{{ row.occurrence.location }}</text>
             </view>
             <view v-if="row.status || row.hidden || row.tag || row.modified" class="mt-1.5 flex flex-wrap gap-1.5">
-              <text v-if="row.tag" class="rounded-full bg-blue-50 px-2 text-3xs text-blue-600 leading-5">{{ row.tag }}</text>
-              <text v-if="row.modified" class="rounded-full bg-amber-50 px-2 text-3xs text-amber-600 leading-5">本次已调整</text>
-              <text v-if="row.status" class="rounded-full bg-gray-100 px-2 text-3xs text-gray-600 leading-5">{{ row.status }}</text>
-              <text v-if="row.hidden" class="rounded-full bg-gray-100 px-2 text-3xs text-gray-500 leading-5">已隐藏</text>
+              <text v-if="row.tag" class="rounded-full bg-primary-light px-2 text-2xs text-primary leading-5">{{ row.tag }}</text>
+              <text v-if="row.modified" class="rounded-full bg-warning-light px-2 text-2xs text-warning leading-5">本次已调整</text>
+              <text v-if="row.status" class="rounded-full bg-fill px-2 text-2xs text-fg-2 leading-5">{{ row.status }}</text>
+              <text v-if="row.hidden" class="rounded-full bg-fill px-2 text-2xs text-fg-3 leading-5">已隐藏</text>
             </view>
           </view>
         </view>
@@ -416,9 +410,3 @@ onPullDownRefresh(async () => {
     @edit="handleDetailEdit"
   />
 </template>
-
-<style lang="scss" scoped>
-button::after {
-  border: none;
-}
-</style>

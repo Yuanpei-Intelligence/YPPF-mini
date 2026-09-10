@@ -29,6 +29,7 @@ import {
 import ApiFieldError from '@/components/ApiFieldError.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { toRequestError } from '@/http/errors'
+import { tokens } from '@/style/tokens'
 import { debounce } from '@/utils/debounce'
 import { confirmModal } from '@/utils/dialog'
 import {
@@ -51,8 +52,6 @@ import {
 definePage({
   style: {
     navigationBarTitleText: '日程',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
   },
 })
 
@@ -708,7 +707,7 @@ async function handleDelete() {
     title: '确认删除',
     content: `删除后「${existing.value.name}」将从课表中移除，无法恢复。`,
     confirmText: '删除',
-    confirmColor: '#dc2626',
+    confirmColor: tokens.error,
   })
   if (!ok)
     return
@@ -764,39 +763,35 @@ onLoad((options) => {
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-10">
+  <view class="min-h-screen bg-page pb-10">
     <uv-toast ref="toastRef" />
-    <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
-      <uv-loading-icon mode="circle" />
-      <text class="mt-3">正在加载…</text>
-    </view>
-
-    <view v-else-if="loadError" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-warning-alt mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="goBack">
-        返回
-      </button>
-    </view>
+    <PageState
+      v-if="loading || loadError"
+      :loading="loading"
+      :error="loadError"
+      loading-text="正在加载…"
+      retry-text="返回"
+      @retry="goBack"
+    />
 
     <view v-else class="px-4 pt-4">
-      <view class="mb-3 text-xs text-gray-400">
+      <view class="mb-3 text-xs text-fg-3">
         学期：{{ term?.name }}
       </view>
 
       <!-- 仅本次 / 本次及以后 -->
-      <view v-if="scopeBanner" class="mb-3 flex items-start gap-2 rounded-2xl bg-amber-50 p-3">
-        <text class="i-carbon-information mt-0.5 shrink-0 text-base text-amber-600" />
-        <text class="flex-1 text-xs text-amber-700 leading-5">{{ scopeBanner }}</text>
+      <view v-if="scopeBanner" class="mb-3 flex items-start gap-2 rounded-lg bg-warning-light p-3">
+        <text class="i-carbon-information mt-0.5 shrink-0 text-base text-warning" />
+        <text class="flex-1 text-xs text-warning-dark leading-5">{{ scopeBanner }}</text>
       </view>
-      <view v-else-if="sourceHint" class="mb-3 rounded-2xl bg-blue-50 p-3">
-        <text class="block text-xs text-blue-700 leading-5">{{ sourceHint }}</text>
-        <text v-if="linkedCatalogText" class="mt-1 block text-xs text-blue-500 leading-5">{{ linkedCatalogText }}</text>
+      <view v-else-if="sourceHint" class="mb-3 rounded-lg bg-primary-light p-3">
+        <text class="block text-xs text-primary-dark leading-5">{{ sourceHint }}</text>
+        <text v-if="linkedCatalogText" class="mt-1 block text-xs text-primary leading-5">{{ linkedCatalogText }}</text>
       </view>
 
       <!-- 课程库联想 -->
-      <view v-if="!isEdit" class="mb-3 rounded-2xl bg-white p-4 shadow-sm">
-        <text class="mb-2 block text-sm text-gray-700 font-medium">从课程库填入</text>
+      <view v-if="!isEdit" class="mb-3 yp-card">
+        <text class="mb-2 block text-sm text-fg-2 font-medium">从课程库填入</text>
         <view class="relative">
           <input
             v-model="catalogQuery"
@@ -808,75 +803,75 @@ onLoad((options) => {
             <uv-loading-icon size="16" />
           </view>
         </view>
-        <view v-if="catalogResults.length" class="mt-2 border border-gray-100 rounded-lg">
+        <view v-if="catalogResults.length" class="mt-2 border border-line-light rounded-md">
           <view
             v-for="item in catalogResults"
             :key="item.id"
-            class="border-b border-gray-50 px-3 py-2 last:border-none active:bg-gray-50"
+            class="border-b border-line-light px-3 py-2 last:border-none active:bg-fill"
             @click="pickCatalogEntry(item)"
           >
             <view class="flex items-center justify-between gap-2">
-              <text class="min-w-0 flex-1 truncate text-sm text-gray-800">{{ item.name }}</text>
-              <text v-if="item.added" class="shrink-0 rounded bg-green-50 px-1.5 text-3xs text-green-600 leading-5">已在课表</text>
-              <text v-if="item.credits !== null" class="shrink-0 text-xs text-gray-400">{{ item.credits }} 学分</text>
+              <text class="min-w-0 flex-1 truncate text-sm text-fg-1">{{ item.name }}</text>
+              <StatusTag v-if="item.added" type="success" text="已在课表" class="shrink-0" />
+              <text v-if="item.credits !== null" class="shrink-0 text-xs text-fg-3">{{ item.credits }} 学分</text>
             </view>
-            <text class="mt-0.5 block truncate text-xs text-gray-400">{{ describeCatalogEntry(item) }}</text>
+            <text class="mt-0.5 block truncate text-xs text-fg-3">{{ describeCatalogEntry(item) }}</text>
           </view>
         </view>
-        <view v-else-if="catalogPicked" class="mt-2 rounded-lg bg-blue-50 p-3">
+        <view v-else-if="catalogPicked" class="mt-2 rounded-md bg-primary-light p-3">
           <view class="flex items-center justify-between gap-2">
-            <text class="min-w-0 flex-1 truncate text-sm text-blue-700 font-medium">{{ catalogPicked.name }}</text>
-            <text class="shrink-0 text-xs text-blue-500" @click="clearPickedCatalog">清除</text>
+            <text class="min-w-0 flex-1 truncate text-sm text-primary-dark font-medium">{{ catalogPicked.name }}</text>
+            <text class="shrink-0 text-xs text-primary" @click="clearPickedCatalog">清除</text>
           </view>
-          <text v-if="catalogPicked.time_text" class="mt-1 block text-xs text-blue-500 leading-5">{{ catalogPicked.time_text }}</text>
+          <text v-if="catalogPicked.time_text" class="mt-1 block text-xs text-primary leading-5">{{ catalogPicked.time_text }}</text>
           <template v-if="catalogPicked.slots.length > 1">
             <view class="mt-2 flex flex-wrap gap-2">
               <view
                 v-for="(slot, index) in catalogPicked.slots"
                 :key="index"
                 class="rounded-full px-3 py-1 text-xs"
-                :class="index === catalogSlotIndex ? 'bg-blue-600 text-white' : 'bg-white text-blue-600'"
+                :class="index === catalogSlotIndex ? 'bg-primary text-white' : 'bg-card text-primary'"
                 @click="pickCatalogSlot(index)"
               >
                 {{ slotLabel(slot, index) }}
               </view>
             </view>
-            <text class="mt-2 block text-xs text-blue-400 leading-5">这门课有多个上课时间：点选一个填入本条，其余时间保存后再添加一条；或用下面的按钮一次全部加入</text>
+            <text class="mt-2 block text-xs text-fg-2 leading-5">这门课有多个上课时间：点选一个填入本条，其余时间保存后再添加一条；或用下面的按钮一次全部加入</text>
           </template>
-          <text v-else-if="!catalogPicked.slots.length" class="mt-1 block text-xs text-blue-400">未能解析上课时间，请在下方手动选择</text>
+          <text v-else-if="!catalogPicked.slots.length" class="mt-1 block text-xs text-fg-2">未能解析上课时间，请在下方手动选择</text>
           <button
             v-if="catalogPicked.slots.length"
-            class="mt-3 w-full border border-blue-200 rounded-lg bg-white py-2 text-sm text-blue-600 font-medium"
+            class="btn-secondary mt-3 btn-block btn-sm"
             :disabled="quickAdding || submitting"
             @click="handleQuickAdd"
           >
             {{ quickAdding ? '添加中…' : `一键添加全部时段（旁听，${catalogPicked.slots.length} 个）` }}
           </button>
         </view>
-        <text v-else class="mt-2 block text-xs text-gray-400 leading-5">搜索本学期课程库可一键填入名称、教师与时间；也可以直接在下方手动填写</text>
+        <text v-else class="mt-2 block text-xs text-fg-3 leading-5">搜索本学期课程库可一键填入名称、教师与时间；也可以直接在下方手动填写</text>
       </view>
 
-      <view class="rounded-2xl bg-white p-4 shadow-sm space-y-4">
+      <view class="yp-card space-y-4">
         <view v-if="showCategory">
-          <text class="mb-2 block text-sm text-gray-700 font-medium">类别</text>
+          <text class="mb-2 block text-sm text-fg-2 font-medium">类别</text>
           <picker :value="categoryIndex" :range="categoryOptions" @change="onCategoryChange">
             <view class="form-picker">
               <text>{{ CATEGORY_LABELS[form.category] }}</text>
-              <text class="i-carbon-chevron-down text-gray-400" />
+              <text class="i-carbon-chevron-down text-fg-3" />
             </view>
           </picker>
-          <text v-if="isExam" class="mt-1 block text-xs text-gray-400 leading-5">考试只占一周；学期考试安排导入后，课程的考试会自动出现，无需手动添加</text>
+          <text v-if="isExam" class="mt-1 block text-xs text-fg-3 leading-5">考试只占一周；学期考试安排导入后，课程的考试会自动出现，无需手动添加</text>
           <ApiFieldError :messages="getFieldMessages('category')" />
         </view>
 
         <view v-if="showRole">
-          <text class="mb-2 block text-sm text-gray-700 font-medium">已选 / 旁听</text>
-          <view class="flex overflow-hidden border border-gray-200 rounded-xl">
+          <text class="mb-2 block text-sm text-fg-2 font-medium">已选 / 旁听</text>
+          <view class="flex overflow-hidden border border-line rounded-md">
             <view
               v-for="option in ROLE_OPTIONS"
               :key="option.value"
               class="flex-1 py-2 text-center text-sm"
-              :class="form.role === option.value ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'"
+              :class="form.role === option.value ? 'bg-primary text-white' : 'bg-card text-fg-2'"
               @click="form.role = option.value"
             >
               {{ option.label }}
@@ -886,7 +881,7 @@ onLoad((options) => {
         </view>
 
         <view>
-          <text class="mb-2 block text-sm text-gray-700 font-medium">名称</text>
+          <text class="mb-2 block text-sm text-fg-2 font-medium">名称</text>
           <input
             v-model="form.name"
             class="form-input"
@@ -899,19 +894,19 @@ onLoad((options) => {
 
         <view v-if="isSingle" class="flex items-center justify-between">
           <view>
-            <text class="block text-sm text-gray-700 font-medium">本次不上课</text>
-            <text class="block text-xs text-gray-400">这一周的这次课从课表中去掉</text>
+            <text class="block text-sm text-fg-2 font-medium">本次不上课</text>
+            <text class="block text-xs text-fg-3">这一周的这次课从课表中去掉</text>
           </view>
-          <uv-switch v-model="form.canceled" size="22" active-color="#2563eb" />
+          <uv-switch v-model="form.canceled" size="22" :active-color="tokens.primary" />
         </view>
 
         <template v-if="!form.canceled || !isSingle">
           <view>
-            <text class="mb-2 block text-sm text-gray-700 font-medium">星期</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">星期</text>
             <picker :value="form.weekday - 1" :range="weekdayOptions" @change="onWeekdayChange">
               <view class="form-picker">
                 <text>{{ weekdayOptions[form.weekday - 1] }}</text>
-                <text class="i-carbon-chevron-down text-gray-400" />
+                <text class="i-carbon-chevron-down text-fg-3" />
               </view>
             </picker>
             <ApiFieldError :messages="getFieldMessages('weekday')" />
@@ -919,47 +914,47 @@ onLoad((options) => {
 
           <view class="flex gap-3">
             <view class="flex-1">
-              <text class="mb-2 block text-sm text-gray-700 font-medium">开始节次</text>
+              <text class="mb-2 block text-sm text-fg-2 font-medium">开始节次</text>
               <picker :value="startSectionIndex" :range="sectionOptions" @change="onStartSectionChange">
                 <view class="form-picker">
                   <text class="truncate">第{{ form.start_section }}节</text>
-                  <text class="i-carbon-chevron-down text-gray-400" />
+                  <text class="i-carbon-chevron-down text-fg-3" />
                 </view>
               </picker>
               <ApiFieldError :messages="getFieldMessages('start_section')" />
             </view>
             <view class="flex-1">
-              <text class="mb-2 block text-sm text-gray-700 font-medium">结束节次</text>
+              <text class="mb-2 block text-sm text-fg-2 font-medium">结束节次</text>
               <picker :value="endSectionIndex" :range="sectionOptions" @change="onEndSectionChange">
                 <view class="form-picker">
                   <text class="truncate">第{{ form.end_section }}节</text>
-                  <text class="i-carbon-chevron-down text-gray-400" />
+                  <text class="i-carbon-chevron-down text-fg-3" />
                 </view>
               </picker>
               <ApiFieldError :messages="getFieldMessages('end_section')" />
             </view>
           </view>
-          <text class="block text-xs text-gray-400">
+          <text class="block text-xs text-fg-3">
             {{ rows[startSectionIndex]?.start }} – {{ rows[endSectionIndex]?.end }}
           </text>
 
           <view v-if="showWeekRange" class="flex gap-3">
             <view class="flex-1">
-              <text class="mb-2 block text-sm text-gray-700 font-medium">开始周</text>
+              <text class="mb-2 block text-sm text-fg-2 font-medium">开始周</text>
               <picker :value="form.week_start - 1" :range="weekOptions" @change="onWeekStartChange">
                 <view class="form-picker">
                   <text>第{{ form.week_start }}周</text>
-                  <text class="i-carbon-chevron-down text-gray-400" />
+                  <text class="i-carbon-chevron-down text-fg-3" />
                 </view>
               </picker>
               <ApiFieldError :messages="getFieldMessages('week_start')" />
             </view>
             <view class="flex-1">
-              <text class="mb-2 block text-sm text-gray-700 font-medium">结束周</text>
+              <text class="mb-2 block text-sm text-fg-2 font-medium">结束周</text>
               <picker :value="form.week_end - 1" :range="weekOptions" @change="onWeekEndChange">
                 <view class="form-picker">
                   <text>第{{ form.week_end }}周</text>
-                  <text class="i-carbon-chevron-down text-gray-400" />
+                  <text class="i-carbon-chevron-down text-fg-3" />
                 </view>
               </picker>
               <ApiFieldError :messages="getFieldMessages('week_end')" />
@@ -967,47 +962,47 @@ onLoad((options) => {
           </view>
 
           <view v-if="showExamWeek">
-            <text class="mb-2 block text-sm text-gray-700 font-medium">周次</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">周次</text>
             <picker :value="form.week_start - 1" :range="weekOptions" @change="onExamWeekChange">
               <view class="form-picker">
                 <text>第{{ form.week_start }}周</text>
-                <text class="i-carbon-chevron-down text-gray-400" />
+                <text class="i-carbon-chevron-down text-fg-3" />
               </view>
             </picker>
-            <text v-if="examDateText" class="mt-1 block text-xs text-red-500 leading-5">{{ examDateText }}</text>
+            <text v-if="examDateText" class="mt-1 block text-xs text-error leading-5">{{ examDateText }}</text>
             <ApiFieldError :messages="getFieldMessages('week_start')" />
             <ApiFieldError :messages="getFieldMessages('week_end')" />
           </view>
 
           <view v-if="showWeekRange">
-            <text class="mb-2 block text-sm text-gray-700 font-medium">单双周</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">单双周</text>
             <picker :value="form.parity" :range="parityOptions" @change="onParityChange">
               <view class="form-picker">
                 <text>{{ parityOptions[form.parity] }}</text>
-                <text class="i-carbon-chevron-down text-gray-400" />
+                <text class="i-carbon-chevron-down text-fg-3" />
               </view>
             </picker>
             <ApiFieldError :messages="getFieldMessages('parity')" />
           </view>
           <view v-else-if="existing && !isManual && !isScoped">
-            <text class="mb-1 block text-sm text-gray-700 font-medium">周次</text>
-            <text class="block text-sm text-gray-500">{{ describeWeeks(existing) }}（以导入为准）</text>
+            <text class="mb-1 block text-sm text-fg-2 font-medium">周次</text>
+            <text class="block text-sm text-fg-2">{{ describeWeeks(existing) }}（以导入为准）</text>
           </view>
 
           <view>
-            <text class="mb-2 block text-sm text-gray-700 font-medium">地点</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">地点</text>
             <input v-model="form.room" class="form-input" placeholder="选填" :maxlength="100">
             <ApiFieldError :messages="getFieldMessages('room')" />
           </view>
 
           <view>
-            <text class="mb-2 block text-sm text-gray-700 font-medium">教师 / 负责人</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">教师 / 负责人</text>
             <input v-model="form.teacher" class="form-input" placeholder="选填" :maxlength="80">
             <ApiFieldError :messages="getFieldMessages('teacher')" />
           </view>
 
           <view>
-            <text class="mb-2 block text-sm text-gray-700 font-medium">标签</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">标签</text>
             <input
               v-model="form.tag"
               class="form-input"
@@ -1019,18 +1014,18 @@ onLoad((options) => {
                 v-for="tag in tagSuggestions"
                 :key="tag"
                 class="rounded-full px-3 py-1 text-xs"
-                :class="tag === form.tag ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'"
+                :class="tag === form.tag ? 'bg-primary text-white' : 'bg-fill text-fg-2'"
                 @click="pickTag(tag)"
               >
                 {{ tag }}
               </view>
             </view>
-            <text v-if="!isScoped" class="mt-1 block text-xs text-gray-400 leading-5">带标签的日程可以在首页「筛选」里按标签显示或隐藏</text>
+            <text v-if="!isScoped" class="mt-1 block text-xs text-fg-3 leading-5">带标签的日程可以在首页「筛选」里按标签显示或隐藏</text>
             <ApiFieldError :messages="getFieldMessages('tag')" />
           </view>
 
           <view>
-            <text class="mb-2 block text-sm text-gray-700 font-medium">备注</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">备注</text>
             <textarea
               v-model="form.note"
               class="form-textarea"
@@ -1043,11 +1038,11 @@ onLoad((options) => {
         </template>
 
         <ApiFieldError :messages="getFieldMessages('non_field_errors')" />
-        <text v-if="formError" class="block text-sm text-red-500">{{ formError }}</text>
+        <text v-if="formError" class="block text-sm text-error">{{ formError }}</text>
       </view>
 
       <button
-        class="mt-6 w-full rounded-xl bg-blue-500 py-3 text-base text-white font-medium"
+        class="btn-primary mt-6 btn-block"
         :disabled="submitting || quickAdding"
         @click="handleSubmit"
       >
@@ -1055,7 +1050,7 @@ onLoad((options) => {
       </button>
       <button
         v-if="isEdit && isManual && !isScoped"
-        class="mt-3 w-full border border-red-200 rounded-xl bg-white py-3 text-base text-red-500 font-medium"
+        class="btn-danger mt-3 btn-block"
         :disabled="deleting"
         @click="handleDelete"
       >
@@ -1072,11 +1067,11 @@ onLoad((options) => {
   box-sizing: border-box;
   width: 100%;
   padding: 0 24rpx;
-  font-size: 28rpx;
-  color: #1f2937;
-  background: #f9fafb;
-  border: 2rpx solid #e5e7eb;
-  border-radius: 12rpx;
+  font-size: var(--yp-font-sm);
+  color: var(--yp-text-1);
+  background: var(--yp-bg-fill);
+  border: 2rpx solid var(--yp-border);
+  border-radius: var(--yp-radius-md);
 }
 
 .form-input,
@@ -1086,7 +1081,7 @@ onLoad((options) => {
 }
 
 .form-input--error {
-  border-color: #f87171;
+  border-color: var(--yp-color-error);
 }
 
 .form-picker {
@@ -1099,9 +1094,5 @@ onLoad((options) => {
   min-height: 120rpx;
   padding: 16rpx 24rpx;
   line-height: 1.5;
-}
-
-button::after {
-  border: none;
 }
 </style>
