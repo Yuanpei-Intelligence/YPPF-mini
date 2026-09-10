@@ -1,5 +1,4 @@
 <script setup lang="ts">
-// i-carbon-code
 import { customTabbarEnable, needHideNativeTabbar, tabbarCacheEnable } from './config'
 import { tabbarList, tabbarStore } from './store'
 import TabbarItem from './TabbarItem.vue'
@@ -12,13 +11,10 @@ defineOptions({
 // #endif
 
 /**
- * 中间的鼓包tabbarItem的点击事件
+ * 中间的鼓包 tabbarItem 的点击事件（当前未配置鼓包项；接入时在此处触发业务逻辑）
  */
 function handleClickBulge() {
-  uni.showToast({
-    title: '点击了中间的鼓包tabbarItem',
-    icon: 'none',
-  })
+  console.warn('[tabbar] bulge item clicked but no handler is configured')
 }
 
 function handleClick(index: number) {
@@ -48,9 +44,6 @@ onLoad(() => {
     fail(err) {
       console.log('hideTabBar fail: ', err)
     },
-    success(res) {
-      // console.log('hideTabBar success: ', res)
-    },
   })
 })
 // #endif
@@ -63,14 +56,13 @@ onMounted(() => {
     fail(err) {
       console.log('hideTabBar fail: ', err)
     },
-    success(res) {
-      // console.log('hideTabBar success: ', res)
-    },
   })
 })
 // #endif
-const activeColor = 'var(--wot-color-theme, #1890ff)'
-const inactiveColor = '#666'
+
+// Colors come from the design tokens (src/style/index.scss); keep in sync with tabbar/config.ts
+const activeColor = 'var(--yp-color-primary)'
+const inactiveColor = 'var(--yp-text-3)'
 function getColorByIndex(index: number) {
   return tabbarStore.curIdx === index ? activeColor : inactiveColor
 }
@@ -78,11 +70,11 @@ function getColorByIndex(index: number) {
 
 <template>
   <view v-if="customTabbarEnable" class="h-50px pb-safe">
-    <view class="border-and-fixed bg-white" @touchmove.stop.prevent>
-      <view class="h-60px flex items-center">
+    <view class="border-and-fixed bg-card" @touchmove.stop.prevent>
+      <view class="h-50px flex items-center">
         <view
           v-for="(item, index) in tabbarList" :key="index"
-          class="flex flex-1 flex-col items-center justify-center pt-5px"
+          class="flex flex-1 flex-col items-center justify-center"
           :style="{ color: getColorByIndex(index) }"
           @click="handleClick(index)"
         >
@@ -108,7 +100,7 @@ function getColorByIndex(index: number) {
   left: 0;
   right: 0;
   z-index: 1000;
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--yp-border-light);
   box-sizing: border-box;
 }
 // 中间鼓包的样式
@@ -124,11 +116,7 @@ function getColorByIndex(index: number) {
   width: 250rpx;
   height: 250rpx;
   border-radius: 50%;
-  background-color: #fff;
-  box-shadow: inset 0 0 0 1px #fefefe;
-
-  &:active {
-    // opacity: 0.8;
-  }
+  background-color: var(--yp-bg-card);
+  box-shadow: inset 0 0 0 1px var(--yp-border-light);
 }
 </style>

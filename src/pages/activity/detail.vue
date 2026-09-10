@@ -1,19 +1,25 @@
 <script lang="ts" setup>
-import type { ActivityParticipationStatus, IActivityDetail } from '@/api/types/activity'
+import type { ActivityParticipationStatus, ActivityStatus, IActivityDetail } from '@/api/types/activity'
+import type { StatusTagType } from '@/components/StatusTag.vue'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import { getActivityInfo, signUpActivity, withdrawActivitySignup } from '@/api/activity'
+import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
+import { useConfirm } from '@/hooks/useConfirm'
+import { formatDateTimeRange, formatSmartDateTime } from '@/utils/format'
 
 definePage({
   style: {
-    navigationStyle: 'custom',
     navigationBarTitleText: '活动详情',
   },
 })
 
-interface UvModalInstance {
-  open: () => void
-  close: () => void
+interface MainAction {
+  label: string
+  kind: 'primary' | 'secondary'
+  disabled: boolean
+  onTap?: () => void
 }
 
 const activityId = ref<number | null>(null)
@@ -22,46 +28,34 @@ const loading = ref(true)
 const loadError = ref('')
 const actionLoading = ref(false)
 const toastRef = ref<UvToastInstance | null>(null)
-const withdrawModalRef = ref<UvModalInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
+const { confirm } = useConfirm()
 
-const participationMeta: Record<ActivityParticipationStatus, { label: string, className: string, description: string }> = {
-  申请中: {
-    label: '等待抽签',
-    className: 'bg-purple-50 text-purple-600',
-    description: '已提交报名，抽签结果将在报名截止后公布。',
-  },
-  活动申请失败: {
-    label: '未中签',
-    className: 'bg-gray-100 text-gray-500',
-    description: '本次抽签未中签。',
-  },
-  已报名: {
-    label: '已报名',
-    className: 'bg-green-50 text-green-600',
-    description: '报名成功，请按时参加活动。',
-  },
-  已参与: {
-    label: '已签到',
-    className: 'bg-green-50 text-green-600',
-    description: '你已完成本次活动签到。',
-  },
-  未签到: {
-    label: '待签到',
-    className: 'bg-orange-50 text-orange-600',
-    description: '请在活动现场扫描组织者提供的签到码。',
-  },
-  放弃: {
-    label: '已取消报名',
-    className: 'bg-gray-100 text-gray-500',
-    description: '你已取消本次报名。',
-  },
+const participationMeta: Record<ActivityParticipationStatus, { label: string, type: StatusTagType, description: string }> = {
+  申请中: { label: '等待抽签', type: 'processing', description: '已提交报名，抽签结果将在报名截止后公布。' },
+  活动申请失败: { label: '未中签', type: 'default', description: '本次抽签未中签。' },
+  已报名: { label: '已报名', type: 'success', description: '报名成功，请按时参加活动。' },
+  已参与: { label: '已签到', type: 'success', description: '你已完成本次活动签到。' },
+  未签到: { label: '待签到', type: 'warning', description: '请在活动现场扫描组织者提供的签到码。' },
+  放弃: { label: '已取消报名', type: 'default', description: '你已取消本次报名。' },
 }
 
 const participation = computed(() => {
   const status = activity.value?.participation_status
   return status ? participationMeta[status] : null
 })
+
+function activityStatusType(status: ActivityStatus): StatusTagType {
+  if (status === '报名中' || status === '进行中')
+    return 'success'
+  if (status === '等待中' || status === '待发布')
+    return 'processing'
+  if (status === '审核中')
+    return 'warning'
+  if (status === '已取消' || status === '已撤销' || status === '未过审')
+    return 'error'
+  return 'default'
+}
 
 const canSignUp = computed(() => {
   const data = activity.value
@@ -79,34 +73,39 @@ const canWithdraw = computed(() => {
   return data.participation_status === '申请中' || data.participation_status === '已报名'
 })
 
-const hasAction = computed(() => canSignUp.value || canWithdraw.value)
+/** 底栏只有一个由状态驱动的主按钮；没有可执行动作时按钮只描述状态并禁用。 */
+const mainAction = computed<MainAction>(() => {
+  const data = activity.value
+  if (!data)
+    return { label: '', kind: 'secondary', disabled: true }
+  if (canSignUp.value)
+    return { label: data.bidding ? '参与抽签' : '报名', kind: 'primary', disabled: false, onTap: handleSignUp }
 
-const statusClass = computed(() => {
-  const status = activity.value?.status
-  if (status === '报名中' || status === '进行中')
-    return 'bg-green-50 text-green-600'
-  if (status === '等待中' || status === '待发布')
-    return 'bg-blue-50 text-blue-600'
-  if (status === '已取消' || status === '已撤销' || status === '未过审')
-    return 'bg-red-50 text-red-500'
-  if (status === '审核中')
-    return 'bg-yellow-50 text-yellow-600'
-  return 'bg-gray-100 text-gray-500'
+  const status = participation.value
+  if (data.participation_status === '已参与' || data.participation_status === '未签到' || data.participation_status === '已报名' || data.participation_status === '申请中')
+    return { label: status?.label ?? data.participation_status, kind: 'secondary', disabled: true }
+
+  switch (data.status) {
+    case '报名中':
+      return { label: '无需报名', kind: 'secondary', disabled: true }
+    case '等待中':
+      return { label: '报名已截止', kind: 'secondary', disabled: true }
+    case '进行中':
+      return { label: '活动进行中', kind: 'secondary', disabled: true }
+    case '已结束':
+      return { label: '活动已结束', kind: 'secondary', disabled: true }
+    case '已取消':
+    case '已撤销':
+      return { label: '活动已取消', kind: 'secondary', disabled: true }
+    case '未过审':
+      return { label: '活动未过审', kind: 'secondary', disabled: true }
+    case '审核中':
+    case '待发布':
+      return { label: '暂未开放报名', kind: 'secondary', disabled: true }
+    default:
+      return { label: data.status_display || data.status, kind: 'secondary', disabled: true }
+  }
 })
-
-function formatDateTime(dateTimeStr: string) {
-  if (!dateTimeStr)
-    return ''
-  const date = new Date(dateTimeStr)
-  if (Number.isNaN(date.getTime()))
-    return dateTimeStr
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hours}:${minutes}`
-}
 
 async function fetchActivityInfo() {
   if (activityId.value === null)
@@ -129,13 +128,11 @@ async function fetchActivityInfo() {
 async function submitActivityAction(withdrawing: boolean) {
   if (activityId.value === null || actionLoading.value)
     return
-
   actionLoading.value = true
   try {
     const result = withdrawing
       ? await withdrawActivitySignup(activityId.value)
       : await signUpActivity(activityId.value)
-
     if (activity.value) {
       activity.value.participation_status = result.participation_status
       activity.value.current_participants = result.current_participants
@@ -151,32 +148,54 @@ async function submitActivityAction(withdrawing: boolean) {
   }
 }
 
-function handleActivityAction() {
-  if (activityId.value === null || actionLoading.value)
+async function handleSignUp() {
+  const data = activity.value
+  if (!data || !canSignUp.value || actionLoading.value)
     return
-
-  // 取消报名先经 uv-modal 确认，报名直接提交
-  if (canWithdraw.value) {
-    withdrawModalRef.value?.open()
+  const ok = await confirm({
+    title: data.bidding ? '参与抽签' : '报名活动',
+    content: `确认${data.bidding ? '参与' : '报名'}「${data.title}」？`,
+    confirmText: data.bidding ? '参与抽签' : '报名',
+    cancelText: '再想想',
+  })
+  if (!ok)
     return
-  }
-  if (canSignUp.value)
-    void submitActivityAction(false)
+  await submitActivityAction(false)
 }
 
-function confirmWithdraw() {
-  void submitActivityAction(true)
+async function handleWithdraw() {
+  if (!canWithdraw.value || actionLoading.value)
+    return
+  const ok = await confirm({
+    title: '取消报名',
+    content: '取消后名额会立即释放，之后可能无法再次报名。',
+    confirmText: '取消报名',
+    cancelText: '保留报名',
+    danger: true,
+  })
+  if (!ok)
+    return
+  await submitActivityAction(true)
 }
 
-function goBack() {
-  uni.navigateBack()
+function onMainTap() {
+  if (mainAction.value.disabled || actionLoading.value)
+    return
+  mainAction.value.onTap?.()
+}
+
+function onRetry() {
+  if (activityId.value === null)
+    uni.navigateBack()
+  else
+    void fetchActivityInfo()
 }
 
 onLoad((options) => {
   const id = Number(options?.id)
   if (!Number.isInteger(id) || id <= 0) {
     loading.value = false
-    loadError.value = '活动参数无效，无法打开详情。'
+    loadError.value = '活动参数无效，无法打开详情'
     return
   }
   activityId.value = id
@@ -185,150 +204,112 @@ onLoad((options) => {
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-safe">
-    <uv-navbar
-      title="活动详情"
-      :safe-area-inset-top="true"
-      :placeholder="true"
-      left-icon="arrow-left"
-      @left-click="goBack"
-    />
+  <view class="yp-page">
     <uv-toast ref="toastRef" />
-    <uv-modal
-      ref="withdrawModalRef"
-      title="取消报名"
-      content="是否确认取消本次报名？"
-      show-cancel-button
-      cancel-text="否"
-      confirm-text="是"
-      confirm-color="#ef4444"
-      @confirm="confirmWithdraw"
-    />
 
-    <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
-      <uv-loading-icon mode="circle" />
-      <text class="mt-3">正在加载活动信息…</text>
-    </view>
-
-    <view v-else-if="loadError" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-warning-alt mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button
-        v-if="activityId !== null"
-        class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white"
-        @click="fetchActivityInfo"
-      >
-        重试
-      </button>
-      <button v-else class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="goBack">
-        返回
-      </button>
-    </view>
-
-    <view v-else-if="activity" class="px-4 pt-4" :class="hasAction ? 'pb-28' : 'pb-6'">
-      <view class="overflow-hidden rounded-2xl bg-white shadow-sm">
-        <view class="p-5">
-          <view class="mb-4 flex items-start justify-between gap-3">
-            <text class="flex-1 text-xl text-gray-900 font-bold leading-7">{{ activity.title }}</text>
-            <view class="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium" :class="statusClass">
-              {{ activity.status }}
-            </view>
+    <PageState
+      :loading="loading"
+      :error="loadError"
+      :retry-text="activityId === null ? '返回' : '重试'"
+      @retry="onRetry"
+    >
+      <view v-if="activity" class="px-4 py-3">
+        <!-- 标题与关键信息 -->
+        <view class="yp-card-flat">
+          <text class="block text-xl text-fg-1 font-semibold">{{ activity.title }}</text>
+          <view class="mt-2 flex flex-wrap items-center gap-2">
+            <StatusTag :type="activityStatusType(activity.status)" :text="activity.status_display || activity.status" size="md" />
+            <StatusTag v-if="activity.category_display" :text="activity.category_display" />
+            <StatusTag :text="activity.need_apply ? '需报名' : '无需报名'" />
+            <StatusTag v-if="activity.inner" text="内部活动" />
+            <StatusTag v-if="activity.bidding" text="抽签活动" />
+            <StatusTag v-if="activity.need_checkin" text="需签到" />
           </view>
 
-          <view class="text-sm text-gray-600 space-y-3">
-            <view class="flex items-start gap-2">
-              <text class="i-carbon-user mt-0.5 text-base text-gray-400" />
-              <text class="flex-1">{{ activity.organization_name }}</text>
-            </view>
-            <view class="flex items-start gap-2">
-              <text class="i-carbon-time mt-0.5 text-base text-gray-400" />
-              <view class="flex flex-col gap-1">
-                <text>{{ formatDateTime(activity.start) }}</text>
-                <text>至 {{ formatDateTime(activity.end) }}</text>
+          <view class="mt-4 flex flex-col gap-3">
+            <view class="flex items-start gap-3">
+              <view class="i-carbon-time mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <text class="block text-xs text-fg-3">时间</text>
+                <text class="block text-sm text-fg-1">{{ formatDateTimeRange(activity.start, activity.end) }}</text>
               </view>
             </view>
-            <view v-if="activity.location" class="flex items-start gap-2">
-              <text class="i-carbon-location mt-0.5 text-base text-gray-400" />
-              <text class="flex-1">{{ activity.location }}</text>
+            <view v-if="activity.location" class="flex items-start gap-3">
+              <view class="i-carbon-location mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <text class="block text-xs text-fg-3">地点</text>
+                <text class="block text-sm text-fg-1">{{ activity.location }}</text>
+              </view>
             </view>
-            <view v-if="activity.need_apply" class="flex items-start gap-2">
-              <text class="i-carbon-calendar mt-0.5 text-base text-gray-400" />
-              <text class="flex-1">报名截止：{{ formatDateTime(activity.apply_end) }}</text>
+            <view class="flex items-start gap-3">
+              <view class="i-carbon-group mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <text class="block text-xs text-fg-3">主办</text>
+                <text class="block text-sm text-fg-1">{{ activity.organization_name }}</text>
+              </view>
             </view>
-            <view v-if="activity.capacity > 0" class="flex items-start gap-2">
-              <text class="i-carbon-group mt-0.5 text-base text-gray-400" />
-              <text class="flex-1">已报名 {{ activity.current_participants }} / {{ activity.capacity }} 人</text>
+            <view v-if="activity.capacity > 0" class="flex items-start gap-3">
+              <view class="i-carbon-user-multiple mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <text class="block text-xs text-fg-3">名额</text>
+                <text class="block text-sm text-fg-1">{{ activity.current_participants }} / {{ activity.capacity }}</text>
+              </view>
             </view>
-          </view>
-
-          <view class="mt-4 flex flex-wrap gap-2 border-t border-gray-100 pt-4">
-            <view class="rounded-lg bg-gray-100 px-2 py-1 text-xs text-gray-600">
-              {{ activity.category_display }}
-            </view>
-            <view v-if="activity.need_apply" class="rounded-lg bg-orange-50 px-2 py-1 text-xs text-orange-600">
-              需报名
-            </view>
-            <view v-else class="rounded-lg bg-green-50 px-2 py-1 text-xs text-green-600">
-              无需报名
-            </view>
-            <view v-if="activity.inner" class="rounded-lg bg-blue-50 px-2 py-1 text-xs text-blue-600">
-              内部活动
-            </view>
-            <view v-if="activity.bidding" class="rounded-lg bg-purple-50 px-2 py-1 text-xs text-purple-600">
-              抽签活动
-            </view>
-            <view v-if="activity.need_checkin" class="rounded-lg bg-cyan-50 px-2 py-1 text-xs text-cyan-600">
-              需签到
+            <view v-if="activity.need_apply && activity.apply_end" class="flex items-start gap-3">
+              <view class="i-carbon-calendar mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <text class="block text-xs text-fg-3">报名截止</text>
+                <text class="block text-sm text-fg-1">{{ formatSmartDateTime(activity.apply_end) }}</text>
+              </view>
             </view>
           </view>
         </view>
-      </view>
 
-      <view v-if="participation" class="mt-4 rounded-2xl bg-white p-4 shadow-sm">
-        <view class="flex items-center justify-between gap-3">
-          <text class="text-sm text-gray-800 font-medium">我的参与状态</text>
-          <view class="rounded-full px-2.5 py-1 text-xs font-medium" :class="participation.className">
-            {{ participation.label }}
+        <!-- 我的参与状态 -->
+        <view v-if="participation" class="mt-3 yp-card-flat">
+          <view class="flex items-center justify-between gap-3">
+            <text class="text-base text-fg-1 font-medium">我的参与状态</text>
+            <StatusTag :type="participation.type" :text="participation.label" />
           </view>
+          <text class="mt-2 block text-sm text-fg-2">{{ participation.description }}</text>
         </view>
-        <text class="mt-2 block text-sm text-gray-500 leading-6">{{ participation.description }}</text>
-      </view>
 
-      <view v-if="activity.need_checkin" class="mt-4 rounded-2xl bg-white p-4 shadow-sm">
-        <text class="text-sm text-gray-800 font-medium">签到方式</text>
-        <text class="mt-2 block text-sm text-gray-500 leading-6">
-          请在活动开始前一小时至活动结束前，到现场扫描组织者展示的签到二维码。
-        </text>
-      </view>
+        <!-- 签到方式 -->
+        <view v-if="activity.need_checkin" class="mt-3 yp-card-flat">
+          <text class="block text-base text-fg-1 font-medium">签到方式</text>
+          <text class="mt-2 block text-sm text-fg-2">活动开始前 1 小时至活动结束前，在现场扫描组织者展示的签到码。</text>
+        </view>
 
-      <view class="mt-4 rounded-2xl bg-white p-5 shadow-sm">
-        <text class="text-base text-gray-900 font-semibold">活动介绍</text>
-        <text v-if="activity.introduction" class="introduction mt-3 block text-sm text-gray-600 leading-6">
-          {{ activity.introduction }}
-        </text>
-        <text v-else class="mt-3 block text-sm text-gray-400">暂无活动介绍</text>
-      </view>
-    </view>
+        <!-- 活动介绍 -->
+        <view class="mt-3 yp-card-flat">
+          <text class="block text-base text-fg-1 font-medium">活动介绍</text>
+          <text v-if="activity.introduction" class="mt-2 block whitespace-pre-wrap text-sm text-fg-2 leading-relaxed">{{ activity.introduction }}</text>
+          <text v-else class="mt-2 block text-sm text-fg-3">暂无活动介绍</text>
+        </view>
 
-    <view v-if="activity && hasAction" class="fixed bottom-0 left-0 right-0 z-50 bg-white px-4 pt-3 pb-safe shadow-lg">
-      <button
-        class="w-full rounded-lg py-3 text-base font-medium"
-        :class="canWithdraw ? 'border border-red-200 bg-white text-red-500' : 'bg-blue-500 text-white'"
-        :disabled="actionLoading"
-        @click="handleActivityAction"
-      >
-        {{ actionLoading ? '处理中…' : (canWithdraw ? '取消报名' : (activity.bidding ? '参与抽签' : '立即报名')) }}
-      </button>
+        <!-- 固定底栏占位 -->
+        <view class="pb-safe" :class="canWithdraw ? 'h-232rpx' : 'h-160rpx'" />
+      </view>
+    </PageState>
+
+    <!-- 底栏：一个状态驱动的主按钮 + 可选的次级取消 -->
+    <view v-if="activity && !loading" class="fixed bottom-0 left-0 right-0 z-10 bg-card shadow-float pb-safe">
+      <view class="px-4 py-3">
+        <view
+          class="btn-block"
+          :class="[mainAction.kind === 'primary' ? 'btn-primary' : 'btn-secondary', { 'opacity-50': mainAction.disabled || actionLoading }]"
+          @click="onMainTap"
+        >
+          {{ actionLoading ? '处理中…' : mainAction.label }}
+        </view>
+        <view
+          v-if="canWithdraw"
+          class="mt-1 min-h-64rpx flex items-center justify-center text-sm text-error active:opacity-70"
+          @click="handleWithdraw"
+        >
+          取消报名
+        </view>
+      </view>
     </view>
   </view>
 </template>
-
-<style lang="scss" scoped>
-.pb-safe {
-  padding-bottom: env(safe-area-inset-bottom);
-}
-
-.introduction {
-  white-space: pre-wrap;
-}
-</style>
