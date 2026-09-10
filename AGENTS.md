@@ -295,7 +295,7 @@ Authentication route names in `src/router/config.ts`, `src/pages-auth/*.vue`, an
 - Follow `docs/design/README.md` (design tokens, page skeleton, component selection, states, copy, migration table). Colors, font sizes, radii and shadows come only from the token layer (`src/uni.scss` → `src/style/index.scss` → `uno.config.ts` theme → `src/style/tokens.ts`); pages must not hard-code hex colors or Tailwind palette classes.
 - Reuse `primary` and `p-safe`/`pt-safe`/`pb-safe`. Do not create near-duplicate theme or safe-area rules.
 - Use `rpx` where responsive mini-program sizing matters and existing UnoCSS px utilities for stable icons/layout. Test narrow screens, long Chinese text, and bottom safe areas.
-- uv-ui (`src/uni_modules/uv-*`) is the single component family, complemented by the shared components in `src/components/` (`PageState`, `StatusTag`, `FormField`, `AppConfirmModal`) and the `btn-*`/`yp-*` UnoCSS shortcuts. `wd-*` (wot-design-uni) is legacy: do not add new usages, and migrate touched ones. Do not introduce another UI library.
+- uv-ui (`src/uni_modules/uv-*`) is the single component family, complemented by the shared components in `src/components/` (`PageState`, `StatusTag`, `FormField`, `AppConfirmModal`) and the `btn-*`/`yp-*` UnoCSS shortcuts. wot-design-uni (`wd-*`) has been removed; do not introduce another UI library.
 - Confirmations go through `useConfirm().confirm()` (global `uv-modal` mounted in `App.ku.vue`); `confirmModal()` in `src/utils/dialog.ts` is a compatibility proxy to it.
 - Dynamic UnoCSS/icon classes must appear as complete static literals or be added to `uno.config.ts#safelist`.
 - Pages use the native navigation bar styled once in `pages.config.ts#globalStyle` (white bar, dark text); `definePage` sets only the title and must not override the bar colors. A page with `navigationStyle: 'custom'` (currently only tab pages that need in-bar controls) uses the established `uv-navbar` approach with `placeholder`, safe-area handling, and a back action for non-home pages.
@@ -307,7 +307,6 @@ Authentication route names in `src/router/config.ts`, `src/pages-auth/*.vue`, an
 This section is a dated snapshot, not a permanent waiver. Remove or update an item when it is fixed.
 
 - On 2026-09-10 (after the design-token refresh), `pnpm lint` reports 1 error: `src/utils/globalError.ts` (missing final newline, untouched legacy file). The earlier 65-error snapshot in `arrange-by-time.vue` / `my-appointments.vue` was cleared by their rewrite.
-- `wot-design-uni` is still listed in `package.json` (`"latest"`, unpinned) and registered in `pages.config.ts#easycom`, but no page uses `wd-*` any more; removing the dependency and the `--wot-*` bridge in `src/style/index.scss` is a pending dependency change that needs its own lockfile review.
 - The same snapshot had `pnpm type-check` fail in `src/uni_modules/uv-popup/components/uv-popup/uv-popup.vue:122` with `TS1005`.
 - Several pages import `openWebview` from `@/utils` even though the barrel does not export it. New/touched code imports `@/utils/webview` directly.
 - `@img` resolves to `src/static/images` in Vite but `src/static/*` in TypeScript. Until unified, use `/static/images/...` runtime paths or explicit `@/static/images/...` imports.
