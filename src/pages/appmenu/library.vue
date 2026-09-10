@@ -1,10 +1,6 @@
 <script lang="ts" setup>
-import type {
-  Book,
-  LendRecordList,
-  LendRecordType,
-  LibrarySearchQuery,
-} from '@/api/types/library'
+import type { Book, LendRecordList, LendRecordType, LibrarySearchQuery } from '@/api/types/library'
+import type { StatusTagType } from '@/components/StatusTag.vue'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import {
   getLibraryConfig,
@@ -12,402 +8,284 @@ import {
   getLibraryRecords,
   searchLibraryBooks,
 } from '@/api/library'
+import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
+import { tokens } from '@/style/tokens'
+import { formatChineseDate } from '@/utils/format'
 
 definePage({
   style: {
-    navigationBarTitleText: '图书馆',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
+    navigationBarTitleText: '元培书房',
   },
 })
 
-// 开放时间
-const openingHours = ref('')
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
 
-// Tab展开状态
-const searchExpanded = ref(true)
-const recordsExpanded = ref(false)
+const TABS = [{ name: '馆藏查询' }, { name: '我的借阅' }]
+const activeTab = ref(0)
 
-// 搜索相关
+// 开馆时间（辅助信息，加载失败时隐藏）
+const openingHours = ref('')
+
+// 馆藏查询
 const searchKeyword = ref('')
-const searchResults = ref<Book[]>([])
-const searching = ref(false)
-
-// 是否只显示可借阅
 const onlyAvailable = ref(false)
+const searched = ref(false)
+const searching = ref(false)
+const searchError = ref('')
+const searchResults = ref<Book[]>([])
 
-// 推荐书籍
-const recommendations = ref<Book[]>([])
-
-// 借阅记录
+// 我的借阅
 const records = ref<LendRecordList[]>([])
+const recordsLoading = ref(false)
+const recordsLoaded = ref(false)
+const recordsError = ref('')
 
-// 轮播图当前索引：0-随机推荐，1-近期活动
-const carouselIndex = ref(0)
+// 随机推荐
+const recommendations = ref<Book[]>([])
+const recommendationsLoading = ref(true)
+const recommendationsError = ref('')
 
-// 轮播图定时器
-let carouselTimer: number | null = null
+const RECORD_STATUS: Record<LendRecordType, { text: string, type: StatusTagType }> = {
+  normal: { text: '借阅中', type: 'processing' },
+  approaching: { text: '即将到期', type: 'warning' },
+  overtime: { text: '已逾期', type: 'error' },
+  returned: { text: '已归还', type: 'success' },
+  overtime_returned: { text: '逾期归还', type: 'default' },
+}
 
-// 加载图书馆配置
+function recordStatus(type: LendRecordType) {
+  return RECORD_STATUS[type] ?? RECORD_STATUS.normal
+}
+
 async function loadLibraryConfig() {
   try {
     const config = await getLibraryConfig()
-    openingHours.value = `${config.opening_time_start} - ${config.opening_time_end}`
+    openingHours.value = `${config.opening_time_start}–${config.opening_time_end}`
   }
   catch (error) {
-    console.error('加载配置失败:', error)
-    handleApiException(error)
+    // 开馆时间只是装饰性信息：失败时不展示该行，也不单独打扰用户
+    handleApiException(error, { showToast: false })
   }
 }
 
-// 加载推荐书籍
 async function loadRecommendations() {
+  recommendationsLoading.value = true
+  recommendationsError.value = ''
   try {
     recommendations.value = await getLibraryRecommendations({ num: 5 })
   }
   catch (error) {
     console.error('加载推荐书籍失败:', error)
-    handleApiException(error)
+    recommendationsError.value = handleApiException(error, { showToast: false }).message
+  }
+  finally {
+    recommendationsLoading.value = false
   }
 }
 
-// 加载借阅记录
 async function loadRecords() {
+  if (recordsLoading.value)
+    return
+  recordsLoading.value = true
+  recordsError.value = ''
   try {
     records.value = await getLibraryRecords({ returned: 'all' })
+    recordsLoaded.value = true
   }
   catch (error) {
     console.error('加载借阅记录失败:', error)
-    handleApiException(error)
+    if (recordsLoaded.value)
+      handleApiException(error)
+    else
+      recordsError.value = handleApiException(error, { showToast: false }).message
+  }
+  finally {
+    recordsLoading.value = false
   }
 }
 
-// 搜索书籍
 async function handleSearch() {
-  // 如果没有输入关键词且没有选择"可借阅"，提示输入
-  if (!searchKeyword.value.trim() && !onlyAvailable.value) {
+  const keywords = searchKeyword.value.trim()
+  if (!keywords && !onlyAvailable.value) {
     showMessage('请输入搜索关键词', 'warning')
     return
   }
-
+  if (searching.value)
+    return
+  searching.value = true
+  searched.value = true
+  searchError.value = ''
   try {
-    searching.value = true
     const query: LibrarySearchQuery = {}
-
-    // 如果有搜索关键词，添加keywords参数
-    if (searchKeyword.value.trim()) {
-      query.keywords = searchKeyword.value.trim()
-    }
-
-    // 如果选择了"可借阅"，只搜索已归还的书籍（已归还=可借阅）
-    if (onlyAvailable.value) {
+    if (keywords)
+      query.keywords = keywords
+    // 「只看可借阅」= 已归还的书籍
+    if (onlyAvailable.value)
       query.returned = true
-    }
-
     searchResults.value = await searchLibraryBooks(query)
   }
   catch (error) {
     console.error('搜索失败:', error)
-    handleApiException(error)
+    searchError.value = handleApiException(error, { showToast: false }).message
   }
   finally {
     searching.value = false
   }
 }
 
-// 切换搜索框展开/收缩
-function toggleSearch() {
-  searchExpanded.value = !searchExpanded.value
-  if (searchExpanded.value) {
-    recordsExpanded.value = false
-  }
+function onTabChange(item: { index: number }) {
+  activeTab.value = item.index
+  if (item.index === 1)
+    void loadRecords()
 }
 
-// 切换借阅记录展开/收缩
-function toggleRecords() {
-  recordsExpanded.value = !recordsExpanded.value
-  if (recordsExpanded.value) {
-    searchExpanded.value = false
-    loadRecords()
-  }
-}
-
-function getRecordStatusInfo(type: LendRecordType) {
-  if (type === 'returned') {
-    return { text: '已归还', className: 'bg-green-100 text-green-600' }
-  }
-  if (type === 'overtime_returned') {
-    return { text: '逾期归还', className: 'bg-gray-100 text-gray-600' }
-  }
-  if (type === 'overtime') {
-    return { text: '已逾期', className: 'bg-red-100 text-red-600' }
-  }
-  if (type === 'approaching') {
-    return { text: '即将到期', className: 'bg-yellow-100 text-yellow-700' }
-  }
-  return { text: '借阅中', className: 'bg-orange-100 text-orange-600' }
-}
-
-// 格式化时间
-function formatTime(time: string | undefined) {
-  if (!time)
-    return '未知'
-  const date = new Date(time)
-  return `${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-// 启动轮播图自动切换
-function startCarouselTimer() {
-  // 清除之前的定时器
-  if (carouselTimer !== null) {
-    clearInterval(carouselTimer)
-  }
-  // 每10秒自动切换
-  carouselTimer = setInterval(() => {
-    carouselIndex.value = carouselIndex.value === 0 ? 1 : 0
-  }, 10000) as unknown as number
-}
-
-// 手动切换轮播图（重置定时器）
-function switchCarousel(index: number) {
-  carouselIndex.value = index
-  startCarouselTimer()
-}
-
-// 页面加载
 onMounted(() => {
-  loadLibraryConfig()
-  loadRecommendations()
-  startCarouselTimer()
-})
-
-// 页面卸载时清除定时器
-onUnmounted(() => {
-  if (carouselTimer !== null) {
-    clearInterval(carouselTimer)
-    carouselTimer = null
-  }
+  void loadLibraryConfig()
+  void loadRecommendations()
 })
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50">
+  <view class="yp-page px-4 py-3">
     <uv-toast ref="toastRef" />
-    <!-- 顶部背景图片区域 -->
-    <view
-      class="relative w-full overflow-hidden"
-      style="background-size: 100%; height: calc(100vw * 0.4); min-height: 420px; max-height: 600px; border-bottom-left-radius: 0; border-bottom-right-radius: 0;"
-    >
-      <image
-        src="@img/background.jpg"
-        mode="aspectFill"
-        class="h-full w-full"
-      />
-      <!-- 右上角开放时间 -->
-      <view class="absolute right-3 top-3 z-10">
-        <text class="text-base text-black" style="font-size: 16px;">
-          <text class="i-carbon-play mr-1" />
-          今日开馆: {{ openingHours || '07:00 - 23:00' }}
-        </text>
+
+    <!-- 封面：2:1 比例，随屏宽缩放 -->
+    <view class="overflow-hidden rounded-lg bg-card">
+      <view class="relative w-full bg-fill pt-[50%]">
+        <image
+          src="/static/images/background.jpg"
+          mode="aspectFill"
+          class="absolute left-0 top-0 h-full w-full"
+        />
       </view>
-
-      <!-- 搜索框区域 -->
-      <view
-        class="absolute left-[10%] w-[80%] rounded-lg"
-        style="opacity: 0.95; top: 15%;"
-      >
-        <!-- Tab按钮行 -->
-        <view class="flex">
-          <!-- 馆藏查询Tab -->
-          <view
-            class="flex-1 cursor-pointer rounded-tl-lg px-4 py-2"
-            :class="searchExpanded ? 'bg-blue-50' : 'bg-blue-100'"
-            @click="toggleSearch"
-          >
-            <view class="flex items-center justify-between">
-              <text class="text-base text-gray-800">
-                <text class="i-carbon-search mr-1" />
-                馆藏查询
-              </text>
-              <text class="i-carbon-chevron-down text-xs" :class="{ 'rotate-180': searchExpanded }" />
-            </view>
-          </view>
-
-          <!-- 我的借阅Tab -->
-          <view
-            class="flex-1 cursor-pointer rounded-tr-lg px-4 py-2"
-            :class="recordsExpanded ? 'bg-blue-50' : 'bg-blue-100'"
-            @click="toggleRecords"
-          >
-            <text class="text-base text-gray-800">
-              <text class="i-carbon-time mr-1" />
-              我的借阅
-            </text>
-          </view>
-        </view>
-
-        <!-- 馆藏查询内容（可展开/收缩） -->
-        <view
-          v-show="searchExpanded"
-          class="rounded-bl-lg rounded-br-lg bg-blue-50 p-4"
-        >
-          <view class="mb-3">
-            <view class="flex items-center gap-2">
-              <input
-                v-model="searchKeyword"
-                class="flex-1 border-2 border-blue-500 rounded-lg bg-white px-4 py-2.5 text-sm"
-                placeholder="搜索书名/作者/索书号/出版社"
-                @confirm="handleSearch"
-              >
-              <view
-                class="cursor-pointer rounded-lg bg-blue-600 px-6 py-2.5 text-sm text-white active:bg-blue-700"
-                @click="handleSearch"
-              >
-                搜索
-              </view>
-            </view>
-          </view>
-
-          <!-- 可借阅选项 -->
-          <view class="flex items-center justify-end gap-2">
-            <view
-              class="h-5 w-5 flex cursor-pointer items-center justify-center border-2 rounded transition"
-              :class="onlyAvailable ? 'border-blue-600 bg-blue-600' : 'border-gray-300 bg-white'"
-              @click="onlyAvailable = !onlyAvailable"
-            >
-              <view v-if="onlyAvailable" class="i-carbon-checkmark text-xs text-white" />
-            </view>
-            <text class="text-sm text-gray-600">可借阅</text>
-          </view>
-
-          <!-- 搜索结果 -->
-          <view v-if="searchResults.length > 0" class="mt-4 max-h-60 overflow-auto">
-            <view
-              v-for="book in searchResults"
-              :key="book.id"
-              class="mb-2 border border-gray-200 rounded-lg bg-white p-3"
-            >
-              <view class="text-base text-gray-800 font-bold">
-                {{ book.title }}
-              </view>
-              <view class="mt-1 text-xs text-gray-500">
-                {{ book.author || '未知作者' }} · {{ book.publisher || '未知出版社' }}
-              </view>
-              <view v-if="book.identity_code" class="mt-1 text-xs text-gray-400">
-                索书号：{{ book.identity_code }}
-              </view>
-            </view>
-          </view>
-        </view>
-
-        <!-- 我的借阅内容（可展开/收缩） -->
-        <view
-          v-show="recordsExpanded"
-          class="max-h-60 overflow-auto rounded-bl-lg rounded-br-lg bg-blue-50 p-4"
-        >
-          <view v-if="records.length === 0" class="py-8 text-center text-gray-500">
-            当前您没有借阅的书籍！
-          </view>
-          <view v-else class="space-y-2">
-            <view
-              v-for="record in records"
-              :key="record.id"
-              class="border border-gray-200 rounded-lg bg-white p-3"
-            >
-              <view class="mb-2">
-                <view class="text-base text-gray-800 font-bold">
-                  {{ record.book_id__title || '未知书籍' }}
-                </view>
-              </view>
-              <view class="flex items-center justify-between text-xs text-gray-500">
-                <text>借阅时间：{{ formatTime(record.lend_time) }}</text>
-                <view
-                  class="rounded-full px-2 py-1"
-                  :class="getRecordStatusInfo(record.type).className"
-                >
-                  {{ getRecordStatusInfo(record.type).text }}
-                </view>
-              </view>
-            </view>
-          </view>
-        </view>
+      <view v-if="openingHours" class="flex items-center gap-1 px-4 py-3 text-xs text-fg-3">
+        <view class="i-carbon-time" />
+        <text>今日开馆 {{ openingHours }}</text>
       </view>
     </view>
 
-    <!-- 下方内容区域 -->
-    <view class="rounded-t-2xl bg-white">
-      <!-- 轮播图指示器 -->
-      <view class="flex justify-center gap-2 py-4">
-        <view
-          class="h-2 w-8 cursor-pointer rounded-full transition"
-          :class="carouselIndex === 0 ? 'bg-blue-600' : 'bg-gray-300'"
-          @click="switchCarousel(0)"
+    <!-- 馆藏查询 / 我的借阅 -->
+    <view class="mt-3 overflow-hidden rounded-lg bg-card">
+      <uv-tabs
+        :list="TABS"
+        :current="activeTab"
+        :scrollable="false"
+        :line-color="tokens.primary"
+        :active-style="{ color: tokens.text1, fontWeight: 600 }"
+        :inactive-style="{ color: tokens.text2 }"
+        @change="onTabChange"
+      />
+
+      <view v-if="activeTab === 0" class="p-4">
+        <uv-search
+          v-model="searchKeyword"
+          placeholder="搜索书名 / 作者 / 索书号"
+          action-text="搜索"
+          :animation="false"
+          :bg-color="tokens.bgFill"
+          :color="tokens.text1"
+          :placeholder-color="tokens.text3"
+          :search-icon-color="tokens.text3"
+          :action-style="{ color: tokens.primary }"
+          height="36"
+          @search="handleSearch"
+          @custom="handleSearch"
         />
-        <view
-          class="h-2 w-8 cursor-pointer rounded-full transition"
-          :class="carouselIndex === 1 ? 'bg-blue-600' : 'bg-gray-300'"
-          @click="switchCarousel(1)"
-        />
+        <view class="mt-2 flex items-center justify-between">
+          <text class="min-h-88rpx flex items-center text-sm text-fg-2" @click="onlyAvailable = !onlyAvailable">只看可借阅</text>
+          <uv-switch v-model="onlyAvailable" size="20" :active-color="tokens.primary" />
+        </view>
+
+        <view class="mt-2">
+          <PageState
+            v-if="searched"
+            :loading="searching"
+            :error="searchError"
+            :empty="searchResults.length === 0"
+            empty-text="没有找到相关图书"
+            empty-icon="i-carbon-search"
+            compact
+            @retry="handleSearch"
+          >
+            <view
+              v-for="(book, idx) in searchResults"
+              :key="book.id"
+              class="flex items-start gap-3 rounded-md bg-fill p-3"
+              :class="{ 'mt-3': idx > 0 }"
+            >
+              <view class="i-carbon-book mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <view class="flex items-start justify-between gap-2">
+                  <text class="line-clamp-2 flex-1 text-base text-fg-1 font-medium">{{ book.title || '未知书名' }}</text>
+                  <StatusTag :type="book.returned ? 'success' : 'default'" :text="book.returned ? '可借阅' : '已借出'" />
+                </view>
+                <text class="mt-1 block text-sm text-fg-2">{{ book.author || '未知作者' }}<text v-if="book.publisher"> · {{ book.publisher }}</text></text>
+                <text v-if="book.identity_code" class="mt-1 block text-xs text-fg-3">索书号 {{ book.identity_code }}</text>
+              </view>
+            </view>
+          </PageState>
+          <text v-else class="block py-4 text-center text-xs text-fg-3">输入关键词查找馆藏，或打开「只看可借阅」后直接搜索</text>
+        </view>
       </view>
 
-      <!-- 轮播内容 -->
-      <view class="relative overflow-hidden" style="min-height: 290px;">
-        <!-- 随机推荐 -->
-        <view v-show="carouselIndex === 0" class="pb-4">
-          <view class="mb-4 px-4 text-lg text-gray-800 font-bold">
-            随机推荐
-          </view>
-          <scroll-view
-            scroll-x
-            class="w-full"
-            enable-flex
+      <view v-else class="p-4">
+        <PageState
+          :loading="recordsLoading && !recordsLoaded"
+          :error="recordsError"
+          :empty="records.length === 0"
+          empty-text="还没有借阅记录"
+          empty-icon="i-carbon-book"
+          compact
+          @retry="loadRecords"
+        >
+          <view
+            v-for="(record, idx) in records"
+            :key="record.id"
+            class="rounded-md bg-fill p-3"
+            :class="{ 'mt-3': idx > 0 }"
           >
-            <view class="flex flex-row gap-3 px-4">
+            <view class="flex items-start justify-between gap-2">
+              <text class="line-clamp-2 flex-1 text-base text-fg-1 font-medium">{{ record.book_id__title || '未知书籍' }}</text>
+              <StatusTag :type="recordStatus(record.type).type" :text="recordStatus(record.type).text" />
+            </view>
+            <text class="mt-1 block text-xs text-fg-3">借于 {{ formatChineseDate(record.lend_time, false) }}<text v-if="record.due_time"> · 应还 {{ formatChineseDate(record.due_time, false) }}</text></text>
+          </view>
+        </PageState>
+      </view>
+    </view>
+
+    <!-- 随机推荐 -->
+    <view class="mt-6">
+      <text class="block px-1 yp-section-title">随机推荐</text>
+      <view class="mt-3">
+        <PageState
+          :loading="recommendationsLoading"
+          :error="recommendationsError"
+          :empty="recommendations.length === 0"
+          empty-text="还没有推荐图书"
+          empty-icon="i-carbon-book"
+          compact
+          @retry="loadRecommendations"
+        >
+          <scroll-view scroll-x enable-flex class="w-full">
+            <view class="flex gap-3">
               <view
                 v-for="book in recommendations"
                 :key="book.id"
-                class="flex-shrink-0 rounded-xl bg-white p-4 shadow-sm"
-                style="width: 280px;"
+                class="w-400rpx shrink-0 yp-card-flat"
               >
-                <view class="flex items-start justify-between">
-                  <view class="i-carbon-book mr-3 text-4xl text-blue-600" />
-                  <view class="flex-1">
-                    <view class="text-right text-base text-blue-600 font-bold">
-                      {{ book.title }}
-                    </view>
-                    <view v-if="book.author" class="mt-1 text-right text-sm text-gray-500">
-                      {{ book.author }}
-                    </view>
-                  </view>
-                </view>
-                <view class="mt-3 flex items-center justify-between border-t border-blue-100 pt-3 text-sm text-blue-600">
-                  <text>索书号</text>
-                  <text>{{ book.identity_code || '未知' }}</text>
-                </view>
+                <view class="i-carbon-book text-lg text-primary" />
+                <text class="line-clamp-2 mt-2 block text-base text-fg-1 font-medium">{{ book.title || '未知书名' }}</text>
+                <text class="mt-1 block truncate text-sm text-fg-2">{{ book.author || '未知作者' }}</text>
+                <text class="mt-2 block text-xs text-fg-3">索书号 {{ book.identity_code || '—' }}</text>
               </view>
             </view>
           </scroll-view>
-        </view>
-
-        <!-- 近期活动 -->
-        <view v-show="carouselIndex === 1" class="px-4 pb-4">
-          <view class="mb-4 text-lg text-gray-800 font-bold">
-            近期活动
-          </view>
-          <view class="py-8 text-center text-gray-500">
-            没有找到书房的活动~
-          </view>
-        </view>
+        </PageState>
       </view>
     </view>
   </view>
 </template>
-
-<style lang="scss" scoped>
-.rotate-180 {
-  transform: rotate(180deg);
-}
-</style>

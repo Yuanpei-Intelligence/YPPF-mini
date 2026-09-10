@@ -1,10 +1,10 @@
 <script lang="ts" setup>
 import type { UvToastInstance } from '@/hooks/useApiException'
 import { storeToRefs } from 'pinia'
-import {
-  getNotificationStatistics,
-} from '@/api/notification'
+import { computed, ref } from 'vue'
+import { getNotificationStatistics } from '@/api/notification'
 import { useApiException } from '@/hooks/useApiException'
+import { useConfirm } from '@/hooks/useConfirm'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
 import { BIND_PAGE, LOGIN_PAGE } from '@/router/config'
 import { useUserStore } from '@/store'
@@ -15,28 +15,43 @@ import { openWebview } from '@/utils/webview'
 definePage({
   style: {
     navigationBarTitleText: '我的',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
   },
 })
+
+interface MenuItem {
+  key: string
+  title: string
+  icon: string
+  onClick: () => void
+}
 
 const userStore = useUserStore()
 const tokenStore = useTokenStore()
 const { userInfo } = storeToRefs(userStore)
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
-
-interface UvModalInstance {
-  open: () => void
-  close: () => void
-}
-
-const unbindModalRef = ref<UvModalInstance | null>(null)
+const { confirm } = useConfirm()
 
 // 默认头像
 const defaultAvatar = '/static/images/default-avatar.png'
 // 只有登录到主账号的时候才显示解绑按钮
 const showUnbind = computed(() => userInfo.value.account_id === userInfo.value.username)
+const unbinding = ref(false)
+const switchingToMain = ref(false)
+
+const avatarSrc = computed(() => (
+  tokenStore.hasLogin
+    ? toBackendURL(userInfo.value.avatar_url || userInfo.value.avatar || defaultAvatar)
+    : defaultAvatar
+))
+const displayName = computed(() => userInfo.value.name || userInfo.value.username || '未设置昵称')
+/** 身份行：学生显示学号，小组账号显示账号名 */
+const identityText = computed(() => {
+  const username = userInfo.value.username
+  if (!username)
+    return ''
+  return userInfo.value.is_org ? `小组账号 ${username}` : `学号 ${username}`
+})
 
 // 微信小程序下登录
 async function handleLogin() {
@@ -45,7 +60,7 @@ async function handleLogin() {
     const result = await tokenStore.wxLogin()
     if (result.status === 'unbound') {
       uni.navigateTo({
-        url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(result.signed_openid)}`,
+        url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(result.signed_openid ?? '')}`,
       })
     }
   }
@@ -60,31 +75,67 @@ async function handleLogin() {
   // #endif
 }
 
-function handleUnbind() {
-  unbindModalRef.value?.open()
+/** 解绑后重新走一次微信登录拿绑定凭据，直接进入绑定页，而不是停留在已登出的「我的」 */
+async function goBindPage() {
+  try {
+    const result = await tokenStore.wxLogin()
+    if (result.status === 'unbound') {
+      uni.reLaunch({
+        url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(result.signed_openid ?? '')}`,
+      })
+      return
+    }
+  }
+  catch (error) {
+    // 首页会在拉取用户信息时再次触发 401 → 绑定页跳转
+    handleApiException(error, { showToast: false })
+  }
+  uni.reLaunch({ url: '/pages/index/index' })
 }
 
-async function confirmUnbind() {
+async function handleUnbind() {
+  if (unbinding.value)
+    return
+  const ok = await confirm({
+    title: '解除绑定',
+    content: '解除后本微信将无法使用 YPPF 小程序，需要重新绑定账号。',
+    confirmText: '解除绑定',
+    cancelText: '暂不解除',
+    danger: true,
+  })
+  if (!ok)
+    return
+  unbinding.value = true
   try {
     await tokenStore.unbind()
-    showMessage('已解除绑定。', 'success')
   }
   catch (error) {
     handleApiException(error)
+    return
   }
+  finally {
+    unbinding.value = false
+  }
+  await goBindPage()
 }
 
 async function handleGotoMain() {
+  if (switchingToMain.value)
+    return
+  switchingToMain.value = true
   try {
     await tokenStore.wxLogin(userInfo.value.account_id)
-    showMessage('切换成功。', 'success')
+    showMessage('已返回主账号', 'success')
     setTimeout(() => {
       uni.reLaunch({ url: '/pages/me/me' })
-    }, 1500)
+    }, 600)
   }
   catch (error) {
     console.error('切换账户失败:', error)
     handleApiException(error)
+  }
+  finally {
+    switchingToMain.value = false
   }
 }
 
@@ -96,31 +147,34 @@ const statistics = ref({
   need_read: 0,
   need_do: 0,
 })
-const totalUnread = computed(() => (statistics.value.unread > 99 ? '99+' : statistics.value.unread))
+const totalUnread = computed(() => (statistics.value.unread > 99 ? '99+' : String(statistics.value.unread)))
 
-async function loadStatistics() {
+/** 等待请求；返回失败原因（成功为 null），供并行请求合并成一次提示 */
+async function settle(request: Promise<unknown>): Promise<unknown> {
   try {
-    statistics.value = await getNotificationStatistics()
+    await request
+    return null
   }
   catch (error) {
-    console.error('加载统计失败:', error)
-    handleApiException(error)
+    return error
   }
 }
 
-// 页面自动刷新：从其他页面返回时自动更新数据，还挺巧妙哈
-// 用页面栈长度判断的捏
+async function loadStatistics() {
+  statistics.value = await getNotificationStatistics()
+}
+
+// 页面自动刷新：从其他页面返回时自动更新未读数与用户信息（头像等），两路失败只提示一次
 usePageRefresh(
   async () => {
-    // 加载未读信息数
-    await loadStatistics()
-    // 更新用户信息，如头像等
-    try {
-      await userStore.fetchUserInfo()
-    }
-    catch (error) {
-      console.error('加载用户信息失败:', error)
-      handleApiException(error)
+    const failures = await Promise.all([
+      settle(loadStatistics()),
+      settle(userStore.fetchUserInfo()),
+    ])
+    const failure = failures.find(Boolean)
+    if (failure) {
+      console.error('加载「我的」页数据失败:', failure)
+      handleApiException(failure)
     }
   },
   {
@@ -129,19 +183,20 @@ usePageRefresh(
   },
 )
 
-// 菜单项
-const menuItems = [
-  { title: '我的课表', icon: 'i-carbon-calendar-heat-map', onClick: () => uni.navigateTo({ url: '/pages/timetable/index' }) },
-  { title: '我的成绩', icon: 'i-carbon-report', onClick: () => uni.navigateTo({ url: '/pages/timetable/grades' }) },
-  { title: '我的预约', icon: 'i-carbon-calendar', onClick: () => uni.navigateTo({ url: '/pages/me/my-appointments' }) },
-  { title: '信用分记录', icon: 'i-carbon-star', onClick: () => uni.navigateTo({ url: '/pages/me/my-violations' }) },
-  // { title: '设置', icon: 'i-carbon-settings', onClick: handleNothing },
-  // { title: '常见问题', icon: 'i-carbon-help', onClick: handleNothing },
-  // { title: '关于我们', icon: 'i-carbon-information', onClick: handleNothing },
-  { title: '切换账户', icon: 'i-carbon-collaborate', onClick: () => uni.navigateTo({ url: '/pages/me/my-accounts' }) },
-  { title: '编辑个人资料', icon: 'i-carbon-user-profile', onClick: () => openWebview({ uri: '/userAccountSetting' }) },
+// 菜单项：入口名与目标页标题一致
+const primaryMenu: MenuItem[] = [
+  { key: 'notifications', title: '通知中心', icon: 'i-carbon-notification', onClick: () => uni.navigateTo({ url: '/pages/me/notifications' }) },
+  { key: 'timetable', title: '我的课表', icon: 'i-carbon-calendar-heat-map', onClick: () => uni.navigateTo({ url: '/pages/timetable/index' }) },
+  { key: 'grades', title: '我的成绩', icon: 'i-carbon-report', onClick: () => uni.navigateTo({ url: '/pages/timetable/grades' }) },
+  { key: 'appointments', title: '我的预约', icon: 'i-carbon-event-schedule', onClick: () => uni.navigateTo({ url: '/pages/me/my-appointments' }) },
+  { key: 'violations', title: '信用分记录', icon: 'i-carbon-star', onClick: () => uni.navigateTo({ url: '/pages/me/my-violations' }) },
+]
+
+const accountMenu: MenuItem[] = [
+  { key: 'accounts', title: '切换账户', icon: 'i-carbon-user-multiple', onClick: () => uni.navigateTo({ url: '/pages/me/my-accounts' }) },
+  { key: 'profile', title: '编辑个人资料', icon: 'i-carbon-user-profile', onClick: () => openWebview({ uri: '/userAccountSetting' }) },
   // Un-comment to debug
-  // { title: '调试信息', icon: 'i-carbon-debug', onClick: () => uni.navigateTo({ url: '/pages/me/debug' }) },
+  // { key: 'debug', title: '调试信息', icon: 'i-carbon-debug', onClick: () => uni.navigateTo({ url: '/pages/me/debug' }) },
 ]
 
 function handleProfile() {
@@ -153,122 +208,89 @@ function handleProfile() {
     void openWebview({ uri: '/orginfo' })
   }
   else {
-    showMessage('您没有主页。', 'warning')
+    showMessage('当前账号没有主页', 'warning')
   }
+}
+
+function handleHeaderClick() {
+  if (tokenStore.hasLogin)
+    handleProfile()
+  else
+    handleLogin()
 }
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-10">
+  <view class="yp-page">
     <uv-toast ref="toastRef" />
-    <uv-modal
-      ref="unbindModalRef"
-      title="解除微信绑定"
-      content="确定要解除当前微信绑定吗？"
-      show-cancel-button
-      @confirm="confirmUnbind"
-    />
-    <!-- 顶部用户信息 -->
-    <view class="relative bg-blue-600 px-6 pb-14 pt-10">
-      <view class="flex items-center">
-        <!-- 头像容器 -->
-        <view class="h-18 w-18 flex-shrink-0 overflow-hidden border-4 border-white/20 rounded-full bg-white shadow-sm">
-          <image
-            class="h-full w-full"
-            :src="tokenStore.hasLogin ? toBackendURL(userInfo.avatar_url || userInfo.avatar || defaultAvatar) : defaultAvatar"
-            mode="aspectFill"
-          />
-        </view>
 
-        <!-- 文字信息 -->
-        <view class="ml-4 flex-1 overflow-hidden">
-          <template v-if="tokenStore.hasLogin">
-            <view class="flex items-center justify-between">
-              <view class="">
-                <view class="truncate text-2xl text-white font-bold">
-                  {{ userInfo.name || userInfo.username || '未设置昵称' }}
-                </view>
-                <view class="mt-1 truncate text-sm text-blue-100 opacity-80">
-                  {{ userInfo.profile?.email || '暂无邮箱' }}
-                </view>
-              </view>
-              <view class="i-carbon-chevron-right px-4 text-lg text-white" @click="handleProfile" />
-            </view>
-          </template>
-          <template v-else>
-            <view class="text-2xl text-white font-bold" @click="handleLogin">
-              点击登录
-            </view>
-            <view class="mt-1 text-sm text-blue-100 opacity-80">
-              登录后查看个人信息
-            </view>
-          </template>
-        </view>
+    <!-- 头像区：整块可点，进入个人主页（未登录时登录） -->
+    <view class="flex items-center gap-4 bg-card px-4 py-5 active:bg-fill" @click="handleHeaderClick">
+      <view class="h-96rpx w-96rpx shrink-0 overflow-hidden rounded-full bg-fill">
+        <image class="h-full w-full" :src="avatarSrc" mode="aspectFill" />
       </view>
+      <view class="min-w-0 flex-1">
+        <template v-if="tokenStore.hasLogin">
+          <text class="block truncate text-lg text-fg-1 font-semibold">{{ displayName }}</text>
+          <text v-if="identityText" class="mt-0.5 block truncate text-sm text-fg-3">{{ identityText }}</text>
+        </template>
+        <template v-else>
+          <text class="block text-lg text-fg-1 font-semibold">点击登录</text>
+          <text class="mt-0.5 block text-sm text-fg-3">登录后查看个人信息</text>
+        </template>
+      </view>
+      <view class="i-carbon-chevron-right shrink-0 text-lg text-fg-4" />
     </view>
 
-    <!-- 功能卡片区 -->
-    <view class="mx-4">
-      <!-- 列表卡片 -->
-      <view class="overflow-hidden rounded-2xl bg-white shadow-sm">
-        <view
-          class="flex items-center justify-between border-b border-gray-50 p-4 last:border-none active:bg-gray-50"
-          @click="() => uni.navigateTo({ url: '/pages/me/notifications' })"
-        >
-          <view class="flex items-center">
-            <view class="i-carbon-email mr-3 text-xl text-blue-600" />
-            <text class="text-base text-gray-800">我的通知</text>
-            <view
-              v-if="totalUnread > 0"
-              class="ml-2 inline-block rounded-full bg-red-500 px-2 py-0.5 text-xs text-white"
-            >
-              {{ totalUnread }}
-            </view>
-          </view>
-          <view class="i-carbon-chevron-right text-sm text-gray-300" />
-        </view>
-        <view
-          v-for="(item, index) in menuItems"
-          :key="index"
-          class="flex items-center justify-between border-b border-gray-50 p-4 last:border-none active:bg-gray-50"
-          @click="item.onClick"
-        >
-          <view class="flex items-center">
-            <view :class="item.icon" class="mr-3 text-xl text-blue-600" />
-            <text class="text-base text-gray-800">{{ item.title }}</text>
-          </view>
-          <view class="i-carbon-chevron-right text-sm text-gray-300" />
-        </view>
-      </view>
-
-      <!-- 解绑按钮 -->
-      <template v-if="tokenStore.hasLogin">
-        <view v-if="showUnbind" class="mt-8 px-2">
-          <button
-            class="w-full rounded-xl border-none bg-white py-3 text-center text-lg text-red-500 font-medium transition-opacity shadow-sm active:opacity-70"
-            @click="handleUnbind"
+    <!-- 功能入口 -->
+    <view class="mt-3 bg-card">
+      <template v-for="(item, index) in primaryMenu" :key="item.key">
+        <view v-if="index > 0" class="yp-divider" />
+        <view class="yp-list-item" @click="item.onClick">
+          <view :class="item.icon" class="text-xl text-fg-2" />
+          <text class="min-w-0 flex-1 text-base text-fg-1">{{ item.title }}</text>
+          <view
+            v-if="item.key === 'notifications' && statistics.unread > 0"
+            class="rounded-full bg-error px-2 text-2xs text-white leading-relaxed tabular-nums"
           >
-            解除绑定
-          </button>
-        </view>
-        <view v-else class="mt-8 px-2">
-          <button
-            class="w-full rounded-xl border-none bg-white py-3 text-center text-lg text-blue-500 font-medium transition-opacity shadow-sm active:opacity-70"
-            @click="handleGotoMain"
-          >
-            返回主账号
-          </button>
+            {{ totalUnread }}
+          </view>
+          <view class="i-carbon-chevron-right text-base text-fg-4" />
         </view>
       </template>
     </view>
+
+    <!-- 账户 -->
+    <view class="mt-3 bg-card">
+      <template v-for="(item, index) in accountMenu" :key="item.key">
+        <view v-if="index > 0" class="yp-divider" />
+        <view class="yp-list-item" @click="item.onClick">
+          <view :class="item.icon" class="text-xl text-fg-2" />
+          <text class="min-w-0 flex-1 text-base text-fg-1">{{ item.title }}</text>
+          <view class="i-carbon-chevron-right text-base text-fg-4" />
+        </view>
+      </template>
+    </view>
+
+    <!-- 危险操作单独放最底部 -->
+    <view v-if="tokenStore.hasLogin" class="mt-6 px-4 pb-6">
+      <button
+        v-if="showUnbind"
+        class="btn-danger btn-block"
+        :disabled="unbinding"
+        @click="handleUnbind"
+      >
+        解除绑定
+      </button>
+      <button
+        v-else
+        class="btn-outline btn-block"
+        :loading="switchingToMain"
+        :disabled="switchingToMain"
+        @click="handleGotoMain"
+      >
+        返回主账号
+      </button>
+    </view>
   </view>
 </template>
-
-<style lang="scss" scoped>
-/* 可以在这里添加一些针对深色/浅色模式或特定细节的微调 */
-button {
-  &::after {
-    border: none;
-  }
-}
-</style>

@@ -1,40 +1,61 @@
 <script lang="ts" setup>
-import type { IMyViolationsResponse } from '@/api/types/appoint'
+import type { IMyViolationsResponse, IViolationAppoint } from '@/api/types/appoint'
 import type { UvToastInstance } from '@/hooks/useApiException'
+import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
+import { computed, ref } from 'vue'
 import { getMyViolations } from '@/api/appoint'
+import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
+import { formatChineseDate, formatNumber } from '@/utils/format'
 
 definePage({
   style: {
-    navigationBarTitleText: '我的信用分记录',
-    navigationStyle: 'default',
+    navigationBarTitleText: '信用分记录',
+    enablePullDownRefresh: true,
   },
 })
 
 const violations = ref<IMyViolationsResponse>()
 const loading = ref<boolean>(false)
+/** 首屏加载失败的页内错误；已有数据时失败只 toast */
+const loadError = ref('')
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException } = useApiException(toastRef)
 
-const credit = computed(() => violations.value?.user_info?.credit || 0)
+const credit = computed(() => formatNumber(violations.value?.user_info?.credit ?? 0))
 const vioList = computed(() => violations.value?.vio_list || [])
 
 async function fetchData() {
   loading.value = true
   try {
-    const res = await getMyViolations()
-    violations.value = res
+    violations.value = await getMyViolations()
+    loadError.value = ''
   }
   catch (error) {
     console.error(error)
-    handleApiException(error)
+    if (violations.value)
+      handleApiException(error)
+    else
+      loadError.value = handleApiException(error, { showToast: false }).message
   }
   finally {
     loading.value = false
   }
 }
 
-function handleAppeal(aid: number, room: string | null | undefined) {
+/** B104 研讨/活动室 */
+function roomOf(violation: IViolationAppoint): string {
+  return [violation.Rid, violation.Rtitle].filter(Boolean).join(' ') || violation.Room || '未知房间'
+}
+
+/** 9月12日 周五 14:00–15:30 */
+function timeOf(violation: IViolationAppoint): string {
+  const range = [violation.Astart_hour_minute, violation.Afinish_hour_minute].filter(Boolean).join('–')
+  return [formatChineseDate(violation.Astart), range].filter(Boolean).join(' ')
+}
+
+function handleAppeal(aid: number) {
   uni.navigateTo({
     url: `/pages/appmenu/feedback/feedback?aid=${aid}`,
   })
@@ -43,105 +64,55 @@ function handleAppeal(aid: number, room: string | null | undefined) {
 onShow(() => {
   fetchData()
 })
+
+onPullDownRefresh(async () => {
+  await fetchData()
+  uni.stopPullDownRefresh()
+})
 </script>
 
 <template>
-  <uv-toast ref="toastRef" />
-  <view class="min-h-screen bg-gray-50 pb-10">
-    <!-- 信用分卡片 -->
-    <view v-if="violations || loading" class="mx-4 mt-4 overflow-hidden border border-blue-100 rounded-lg bg-white shadow-sm">
-      <view class="border-b border-blue-100 from-blue-50 to-cyan-50 bg-gradient-to-r px-4 py-4">
-        <view class="mb-1 text-sm text-gray-600">
-          当前信用分
-        </view>
-        <view class="flex items-center gap-2">
-          <text class="text-3xl text-blue-600 font-bold">{{ credit }}</text>
-          <text class="text-sm text-gray-500">分</text>
+  <view class="yp-page">
+    <uv-toast ref="toastRef" />
+    <PageState :loading="loading && !violations" :error="loadError" @retry="fetchData">
+      <!-- 信用分 -->
+      <view class="bg-card px-4 py-6">
+        <text class="block text-xs text-fg-3">当前信用分</text>
+        <view class="mt-1 flex items-baseline gap-1">
+          <text class="text-3xl text-fg-1 font-semibold leading-none tabular-nums">{{ credit }}</text>
+          <text class="text-sm text-fg-3">分</text>
         </view>
       </view>
-    </view>
 
-    <view class="p-4">
-      <!-- Loading -->
-      <view v-if="loading && !violations" class="py-10 text-center text-gray-400">
-        加载中...
-      </view>
-
-      <!-- 违约记录列表 -->
-      <block v-else>
-        <view v-if="vioList.length === 0" class="py-10 text-center text-gray-400">
-          暂无违约记录
-        </view>
-
-        <view
-          v-for="violation in vioList"
-          :key="violation.Aid"
-          class="mb-4 overflow-hidden border border-red-100 rounded-lg bg-white shadow-sm"
+      <!-- 违约记录 -->
+      <view class="mt-3 pb-6">
+        <text class="block px-4 pb-2 text-xs text-fg-3">违约记录</text>
+        <PageState
+          :empty="vioList.length === 0"
+          empty-icon="i-carbon-checkmark-filled"
+          empty-text="还没有违约记录"
+          compact
         >
-          <!-- Header -->
-          <view class="border-b border-red-100 from-red-50 to-pink-50 bg-gradient-to-r px-4 py-3">
-            <view class="flex items-start justify-between gap-2">
-              <view class="flex-1">
-                <view v-if="violation.Rid" class="mb-1 text-sm text-gray-600">
-                  {{ violation.Rid }}
+          <view class="bg-card">
+            <template v-for="(violation, index) in vioList" :key="violation.Aid">
+              <view v-if="index > 0" class="yp-divider" />
+              <view class="px-4 py-3">
+                <view class="flex items-start gap-2">
+                  <text class="min-w-0 flex-1 text-base text-fg-1 font-medium">{{ roomOf(violation) }}</text>
+                  <StatusTag type="error" text="违约" class="mt-1 shrink-0" />
                 </view>
-                <view class="text-base text-gray-800 font-bold">
-                  {{ violation.Rtitle || '未知房间' }}
+                <text class="mt-1 block text-sm text-fg-2 tabular-nums">{{ timeOf(violation) }}</text>
+                <text v-if="violation.Ausage" class="mt-0.5 block text-xs text-fg-3">用途：{{ violation.Ausage }}</text>
+                <view class="mt-2 flex justify-end">
+                  <button class="btn-outline btn-sm" @click="handleAppeal(violation.Aid)">
+                    申诉
+                  </button>
                 </view>
               </view>
-              <wd-tag type="danger" plain>
-                违约
-              </wd-tag>
-            </view>
+            </template>
           </view>
-
-          <!-- Content -->
-          <view class="px-4 py-3 space-y-2.5">
-            <!-- 预约日期 -->
-            <view class="flex items-center text-sm text-gray-700">
-              <div class="i-carbon-calendar mr-2.5 text-lg text-red-500" />
-              <text class="font-medium">{{ violation.Astart?.split('T')?.[0] || '--' }}</text>
-            </view>
-
-            <!-- 预约时间 -->
-            <view class="flex items-center text-sm text-gray-700">
-              <div class="i-carbon-time mr-2.5 text-lg text-red-500" />
-              <text>{{ violation.Astart_hour_minute }} - {{ violation.Afinish_hour_minute }}</text>
-            </view>
-
-            <!-- 房间信息 -->
-            <view v-if="violation.Room" class="flex items-start text-sm text-gray-700">
-              <div class="i-carbon-location mr-2.5 mt-0.5 flex-shrink-0 text-lg text-red-500" />
-              <view class="flex-1">
-                <text class="text-gray-600">房间：</text>
-                <text class="text-gray-800">{{ violation.Room }}</text>
-              </view>
-            </view>
-
-            <!-- 用途 -->
-            <view v-if="violation.Ausage" class="flex items-start text-sm text-gray-700">
-              <div class="i-carbon-document mr-2.5 mt-0.5 flex-shrink-0 text-lg text-red-500" />
-              <view class="flex-1">
-                <text class="text-gray-600">用途：</text>
-                <text class="text-gray-800">{{ violation.Ausage }}</text>
-              </view>
-            </view>
-          </view>
-
-          <!-- Actions -->
-          <view class="flex items-center gap-2 border-t border-gray-100 px-4 py-3">
-            <button
-              class="flex-1 rounded-lg bg-blue-500 py-2 text-sm text-white font-medium"
-              @click="handleAppeal(violation.Aid, violation.Room)"
-            >
-              申诉
-            </button>
-          </view>
-        </view>
-      </block>
-    </view>
+        </PageState>
+      </view>
+    </PageState>
   </view>
 </template>
-
-<style lang="scss" scoped>
-</style>

@@ -7,14 +7,13 @@ import { deleteGrades, getGrades, syncGrades } from '@/api/grades'
 import { updateConsents } from '@/api/pku'
 import { useApiException } from '@/hooks/useApiException'
 import { toRequestError } from '@/http/errors'
+import { tokens } from '@/style/tokens'
 import { confirmModal } from '@/utils/dialog'
 import { describeTermCode, formatDateTime } from '@/utils/timetable'
 
 definePage({
   style: {
     navigationBarTitleText: '我的成绩',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
     enablePullDownRefresh: true,
   },
 })
@@ -66,7 +65,7 @@ function formatGpa(value: number | string | null | undefined): string {
 }
 
 function scoreClass(row: GradeRow) {
-  return row.score_numeric !== null && row.score_numeric < 60 ? 'text-red-500' : 'text-gray-900'
+  return row.score_numeric !== null && row.score_numeric < 60 ? 'text-error' : 'text-fg-1'
 }
 
 function rowKey(row: GradeRow) {
@@ -197,7 +196,7 @@ async function handleRevoke() {
     title: '撤销授权',
     content: '将撤销成绩数据使用授权，并删除服务端保存的全部成绩记录；课表授权不受影响。',
     confirmText: '撤销并删除',
-    confirmColor: '#dc2626',
+    confirmColor: tokens.error,
   })
   if (!ok)
     return
@@ -245,43 +244,38 @@ onPullDownRefresh(async () => {
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-10">
+  <view class="min-h-screen bg-page pb-10">
     <uv-toast ref="toastRef" />
-    <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
-      <uv-loading-icon mode="circle" />
-      <text class="mt-3">正在加载成绩…</text>
-    </view>
-
-    <view v-else-if="loadError" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-warning-alt mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="load()">
-        重试
-      </button>
-    </view>
+    <PageState
+      v-if="loading || loadError"
+      :loading="loading"
+      :error="loadError"
+      loading-text="正在加载成绩…"
+      @retry="load()"
+    />
 
     <!-- 授权引导 -->
     <view v-else-if="gate === 'consent'" class="px-4 pt-4">
-      <view class="rounded-2xl bg-white p-5 shadow-sm">
+      <view class="rounded-lg bg-card p-5 shadow-card">
         <view class="flex items-center gap-2">
-          <text class="i-carbon-security text-2xl text-blue-600" />
-          <text class="text-base text-gray-900 font-bold">查看成绩需要你的授权</text>
+          <text class="i-carbon-security text-2xl text-primary" />
+          <text class="text-base text-fg-1 font-bold">查看成绩需要你的授权</text>
         </view>
-        <view class="mt-3 text-sm text-gray-600 leading-6 space-y-2">
+        <view class="mt-3 text-sm text-fg-2 leading-6 space-y-2">
           <view>· 获取内容：门户「我的成绩」里各学期的课程名、课程号、学分、成绩与绩点。</view>
           <view>· 只有在你授权后，成绩才会保存在智慧书院服务器，用于在这里展示总学分与 GPA；不会用于其它用途，也不会向他人展示。</view>
           <view>· 你可以随时撤销授权，撤销时会同时删除已保存的全部成绩。</view>
           <view>· 不授权也可以“仅查看一次”，本次数据不会保存。</view>
         </view>
         <button
-          class="mt-5 w-full rounded-lg bg-blue-500 py-2.5 text-sm text-white font-medium"
+          class="btn-primary mt-5 btn-block"
           :disabled="busy"
           @click="handleConsent"
         >
           {{ consenting ? '同步中…' : '同意并同步成绩' }}
         </button>
         <button
-          class="mt-3 w-full border border-gray-200 rounded-lg bg-white py-2.5 text-sm text-gray-700 font-medium"
+          class="btn-outline mt-3 btn-block"
           :disabled="busy"
           @click="handleSync"
         >
@@ -292,13 +286,13 @@ onPullDownRefresh(async () => {
 
     <!-- 未绑定 / 会话失效 -->
     <view v-else-if="gate === 'binding'" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-locked mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ gateMessage }}</text>
+      <text class="i-carbon-locked mb-3 text-3xl text-fg-4" />
+      <text class="text-sm text-fg-2 leading-6">{{ gateMessage }}</text>
       <view class="mt-5 flex gap-3">
-        <button class="rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="goImport">
+        <button class="btn-primary" @click="goImport">
           去绑定
         </button>
-        <button class="border border-gray-200 rounded-lg bg-white px-6 py-2 text-sm text-gray-700" @click="load({ redirect: false })">
+        <button class="btn-outline" @click="load({ redirect: false })">
           重试
         </button>
       </view>
@@ -306,31 +300,31 @@ onPullDownRefresh(async () => {
 
     <view v-else-if="data" class="px-4 pt-4 space-y-4">
       <!-- 总览 -->
-      <view class="rounded-2xl bg-blue-600 p-5 text-white shadow-sm">
+      <view class="yp-card-flat">
         <view class="flex">
           <view class="flex-1">
-            <text class="block text-xs text-blue-100">总学分</text>
-            <text class="mt-1 block text-3xl font-bold">{{ formatCredits(data.summary.credits) }}</text>
+            <text class="block text-xs text-fg-3">总学分</text>
+            <text class="mt-1 block text-3xl text-fg-1 font-semibold tabular-nums">{{ formatCredits(data.summary.credits) }}</text>
           </view>
           <view class="flex-1">
-            <text class="block text-xs text-blue-100">GPA</text>
-            <text class="mt-1 block text-3xl font-bold">{{ formatGpa(data.summary.gpa) }}</text>
+            <text class="block text-xs text-fg-3">GPA</text>
+            <text class="mt-1 block text-3xl text-primary font-semibold tabular-nums">{{ formatGpa(data.summary.gpa) }}</text>
           </view>
           <view class="flex-1">
-            <text class="block text-xs text-blue-100">课程数</text>
-            <text class="mt-1 block text-3xl font-bold">{{ totalCourses }}</text>
+            <text class="block text-xs text-fg-3">课程数</text>
+            <text class="mt-1 block text-3xl text-fg-1 font-semibold tabular-nums">{{ totalCourses }}</text>
           </view>
         </view>
-        <text class="mt-3 block text-xs text-blue-100">{{ fetchedLabel }}</text>
+        <text class="mt-3 block text-xs text-fg-3">{{ fetchedLabel }}</text>
       </view>
 
-      <view v-if="!data.stored" class="rounded-lg bg-amber-50 p-3 text-xs text-amber-700 leading-5">
+      <view v-if="!data.stored" class="rounded-md bg-warning-light p-3 text-xs text-warning-dark leading-5">
         本次成绩未保存（未授权存储），下次打开需重新获取。
-        <text class="text-blue-600" @click="handleConsent">授权并保存</text>
+        <text class="text-primary" @click="handleConsent">授权并保存</text>
       </view>
 
       <button
-        class="w-full rounded-lg bg-blue-500 py-2.5 text-sm text-white font-medium"
+        class="btn-primary btn-block"
         :disabled="busy"
         @click="handleSync"
       >
@@ -338,25 +332,25 @@ onPullDownRefresh(async () => {
       </button>
 
       <view v-if="!terms.length" class="flex flex-col items-center justify-center py-16 text-center">
-        <text class="i-carbon-report mb-3 text-3xl text-gray-200" />
-        <text class="text-sm text-gray-400">还没有成绩记录，请先同步</text>
+        <text class="i-carbon-report mb-3 text-3xl text-fg-4" />
+        <text class="text-sm text-fg-3">还没有成绩记录，请先同步</text>
       </view>
 
       <!-- 各学期 -->
       <view
         v-for="term in terms"
         :key="term.term_code"
-        class="overflow-hidden rounded-2xl bg-white shadow-sm"
+        class="overflow-hidden rounded-lg bg-card shadow-card"
       >
-        <view class="flex items-center justify-between px-4 py-3 active:bg-gray-50" @click="toggleTerm(term.term_code)">
+        <view class="flex items-center justify-between px-4 py-3 active:bg-fill" @click="toggleTerm(term.term_code)">
           <view class="min-w-0 flex-1">
-            <text class="block text-sm text-gray-900 font-medium">{{ describeTermCode(term.term_code) }}</text>
-            <text class="block text-xs text-gray-400">{{ termMeta(term) }}</text>
+            <text class="block text-sm text-fg-1 font-medium">{{ describeTermCode(term.term_code) }}</text>
+            <text class="block text-xs text-fg-3">{{ termMeta(term) }}</text>
           </view>
-          <text class="text-gray-400" :class="collapsed[term.term_code] ? 'i-carbon-chevron-down' : 'i-carbon-chevron-up'" />
+          <text class="text-fg-3" :class="collapsed[term.term_code] ? 'i-carbon-chevron-down' : 'i-carbon-chevron-up'" />
         </view>
-        <view v-if="!collapsed[term.term_code]" class="border-t border-gray-50">
-          <view class="flex items-center bg-gray-50 px-4 py-1.5 text-2xs text-gray-400">
+        <view v-if="!collapsed[term.term_code]" class="border-t border-line-light">
+          <view class="flex items-center bg-page px-4 py-1.5 text-2xs text-fg-3">
             <text class="flex-1">课程</text>
             <text class="w-12 text-right">学分</text>
             <text class="w-14 text-right">成绩</text>
@@ -365,29 +359,23 @@ onPullDownRefresh(async () => {
           <view
             v-for="row in term.rows"
             :key="rowKey(row)"
-            class="flex items-center border-b border-gray-50 px-4 py-2.5 last:border-none"
+            class="flex items-center border-b border-line-light px-4 py-2.5 last:border-none"
           >
             <view class="min-w-0 flex-1">
-              <text class="block truncate text-sm text-gray-800">{{ row.name }}</text>
-              <text v-if="rowMeta(row)" class="block truncate text-xs text-gray-400">{{ rowMeta(row) }}</text>
+              <text class="block truncate text-sm text-fg-1">{{ row.name }}</text>
+              <text v-if="rowMeta(row)" class="block truncate text-xs text-fg-3">{{ rowMeta(row) }}</text>
             </view>
-            <text class="w-12 text-right text-xs text-gray-500">{{ formatCredits(row.credits) }}</text>
+            <text class="w-12 text-right text-xs text-fg-2">{{ formatCredits(row.credits) }}</text>
             <text class="w-14 text-right text-sm font-medium" :class="scoreClass(row)">{{ row.score || '—' }}</text>
-            <text class="w-12 text-right text-xs text-gray-500">{{ formatGpa(row.gpa) }}</text>
+            <text class="w-12 text-right text-xs text-fg-2">{{ formatGpa(row.gpa) }}</text>
           </view>
         </view>
       </view>
 
-      <view class="pt-2 text-center">
-        <text class="text-xs text-red-500" @click="handleRevoke">{{ revoking ? '处理中…' : '撤销授权并删除成绩' }}</text>
-      </view>
-      <text class="block text-center text-2xs text-gray-400">成绩仅供参考，以门户为准</text>
+      <button class="btn-danger btn-block" :disabled="busy" @click="handleRevoke">
+        {{ revoking ? '处理中…' : '撤销授权并删除成绩' }}
+      </button>
+      <text class="block text-center text-2xs text-fg-3">成绩仅供参考，以门户为准</text>
     </view>
   </view>
 </template>
-
-<style lang="scss" scoped>
-button::after {
-  border: none;
-}
-</style>

@@ -16,9 +16,13 @@ import { NotificationStatus } from '@/api/types/notification'
 import ActivityCard from '@/components/ActivityCard.vue'
 import AgendaFilterSheet from '@/components/AgendaFilterSheet.vue'
 import AgendaList from '@/components/AgendaList.vue'
+import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
+import { tokens } from '@/style/tokens'
 import { toBackendURL } from '@/utils'
+import { formatRelativeTime } from '@/utils/format'
 import { filterSummary, readLocalHiddenIds, suspendsClasses } from '@/utils/timetable'
 import { openWebview } from '@/utils/webview'
 
@@ -29,8 +33,6 @@ definePage({
   // 使用 type: "home" 属性设置首页，其他页面不需要设置，默认为page
   type: 'home',
   style: {
-    // 'custom' 表示开启自定义导航栏，默认 'default'
-    navigationStyle: 'custom',
     navigationBarTitleText: '首页',
   },
 })
@@ -68,6 +70,9 @@ const homeTabs: { name: string, key: HomeTabKey }[] = [
   { name: '我的日程', key: 'agenda' },
   { name: '最新发布', key: 'feed' },
 ]
+
+const tabActiveStyle = { color: tokens.text1, fontSize: '30rpx', fontWeight: 600 }
+const tabInactiveStyle = { color: tokens.text3, fontSize: '30rpx' }
 
 const notifyRef = ref()
 const toastRef = ref<UvToastInstance | null>(null)
@@ -227,6 +232,8 @@ function goImport() {
 const activityOverview = ref<IActivityHomepage | null>(null)
 const unreadNotifications = ref<Notification[]>([])
 const feedLoading = ref(true)
+/** 「最新发布」首屏两路都没有数据时的页内错误；已有数据时失败只 toast */
+const feedError = ref('')
 
 /** 后端的本地时间字符串（`YYYY-MM-DDTHH:MM:SS`，或以空格分隔）-> 毫秒时间戳；无法解析时为 0 */
 function timestampOf(value: string | null | undefined): number {
@@ -256,27 +263,6 @@ const feedItems = computed<FeedItem[]>(() => {
   return [...activities, ...notifications].sort((a, b) => b.time - a.time)
 })
 
-/** 通知时间的相对表示：刚刚 / N分钟前 / N小时前 / N天前 / M-D */
-function relativeTime(value: string): string {
-  const time = timestampOf(value)
-  if (!time)
-    return ''
-  const diff = Date.now() - time
-  const minute = 60 * 1000
-  const hour = 60 * minute
-  const day = 24 * hour
-  if (diff < minute)
-    return '刚刚'
-  if (diff < hour)
-    return `${Math.floor(diff / minute)}分钟前`
-  if (diff < day)
-    return `${Math.floor(diff / hour)}小时前`
-  if (diff < 7 * day)
-    return `${Math.floor(diff / day)}天前`
-  const date = new Date(time)
-  return `${date.getMonth() + 1}-${date.getDate()}`
-}
-
 function notificationMeta(notification: Notification): string {
   const sender = notification.anonymous_flag ? '' : notification.sender_name
   return [sender, notification.content].filter(Boolean).join(' · ')
@@ -286,8 +272,9 @@ function onActivityCardClick(id: number) {
   uni.navigateTo({ url: `/pages/activity/detail?id=${id}` })
 }
 
-function goNotifications() {
-  uni.navigateTo({ url: '/pages/me/notifications' })
+/** 打开通知中心并直接展开这一条 */
+function openNotification(id: number) {
+  uni.navigateTo({ url: `/pages/me/notifications?id=${id}` })
 }
 
 /* -------------------- 加载与刷新 -------------------- */
@@ -321,7 +308,10 @@ function loadSettings(): Promise<unknown> {
   })
 }
 
-/** 「最新发布」的两路数据各自独立：一路失败不影响另一路显示 */
+/**
+ * 「最新发布」的两路数据各自独立：一路失败不影响另一路显示。
+ * 两路都没有内容可显示时失败改为页内错误并返回 null，否则把错误交给调用方 toast。
+ */
 async function loadFeed(): Promise<unknown> {
   feedLoading.value = true
   try {
@@ -336,11 +326,26 @@ async function loadFeed(): Promise<unknown> {
         },
       ),
     ])
-    return failures.find(Boolean) ?? null
+    const failure = failures.find(Boolean) ?? null
+    if (!failure) {
+      feedError.value = ''
+      return null
+    }
+    if (feedItems.value.length === 0) {
+      feedError.value = handleApiException(failure, { showToast: false }).message
+      return null
+    }
+    return failure
   }
   finally {
     feedLoading.value = false
   }
+}
+
+async function reloadFeed() {
+  const failure = await loadFeed()
+  if (failure)
+    handleApiException(failure)
 }
 
 /** 两个 tab 的数据一起刷新；多个请求同时失败只提示一次 */
@@ -352,14 +357,6 @@ async function refreshHome() {
     console.error('首页数据获取失败:', failure)
     handleApiException(failure)
   }
-}
-
-// 计算 navbar 高度（44px + 状态栏高度）
-function getNavbarHeight() {
-  const systemInfo = uni.getSystemInfoSync()
-  const statusBarHeight = systemInfo.statusBarHeight || 0
-  const navbarHeight = 44 // navbar 默认高度
-  return navbarHeight + statusBarHeight
 }
 
 async function onCarouselClick(index: number) {
@@ -397,11 +394,9 @@ onMounted(async () => {
   try {
     const data = await everydaySignIn()
     if (data?.message) {
-      const navbarHeight = getNavbarHeight()
       notifyRef.value?.show({
         message: data.message,
         duration: 3000,
-        top: navbarHeight,
       })
     }
   }
@@ -415,90 +410,83 @@ onMounted(async () => {
 </script>
 
 <template>
-  <uv-navbar title="首页" :placeholder="true" left-icon="" />
   <uv-toast ref="toastRef" />
   <uv-notify ref="notifyRef" />
-  <view class="bg-white px-4 pt-safe">
-    <uv-swiper
-      :list="carouselList"
-      key-name="image"
-      :loading="carouselLoading"
-      indicator
-      indicator-mode="dot"
-      circular
-      height="200"
-      radius="8"
-      @click="onCarouselClick"
-    />
-  </view>
+  <view class="yp-page">
+    <!-- 轮播：固定 2:1 圆角图片，加载失败或没有内容时整块隐藏 -->
+    <view v-if="carouselLoading || carouselList.length" class="px-4 pt-3">
+      <uv-swiper
+        :list="carouselList"
+        key-name="image"
+        :loading="carouselLoading"
+        indicator
+        indicator-mode="dot"
+        circular
+        height="343rpx"
+        radius="24rpx"
+        :bg-color="tokens.bgFill"
+        @click="onCarouselClick"
+      />
+    </view>
 
-  <view class="px-4 pb-safe">
-    <view class="mt-4">
+    <view class="mt-3 bg-card">
       <uv-tabs
         :list="homeTabs"
         :current="homeTab"
         :scrollable="false"
+        :line-color="tokens.primary"
+        :active-style="tabActiveStyle"
+        :inactive-style="tabInactiveStyle"
         @change="onHomeTabChange"
       />
     </view>
 
     <!-- 我的日程：今天起 7 天 -->
-    <view v-if="currentTabKey === 'agenda'">
-      <view class="mt-3 flex items-center justify-between gap-2">
-        <view
-          v-if="settings"
-          class="flex items-center gap-1 border border-gray-200 rounded-full bg-white px-2.5 py-1 text-xs text-gray-700 active:bg-gray-50"
-          @click="openFilter"
-        >
-          <text class="i-carbon-filter text-sm text-gray-500" />
-          <text>筛选</text>
-          <text v-if="filterBadge" class="rounded-full bg-blue-600 px-1.5 text-3xs text-white leading-4">{{ filterBadge }}</text>
+    <view v-if="currentTabKey === 'agenda'" class="px-4 pb-6">
+      <view class="mt-2 flex items-center justify-between gap-2">
+        <view v-if="settings" class="py-2 active:opacity-70" @click="openFilter">
+          <view class="h-56rpx flex items-center gap-1 border border-line rounded-full bg-card px-3 text-xs text-fg-2">
+            <view class="i-carbon-filter text-sm text-fg-3" />
+            <text>筛选</text>
+            <text v-if="filterBadge" class="rounded-full bg-primary px-1.5 text-2xs text-white leading-4">{{ filterBadge }}</text>
+          </view>
         </view>
         <view v-else class="flex-1" />
-        <view class="flex shrink-0 items-center text-xs text-blue-600 active:opacity-70" @click="goTimetable">
+        <view class="flex shrink-0 items-center gap-0.5 py-3 text-sm text-primary active:opacity-70" @click="goTimetable">
           <text>完整课表</text>
-          <view class="i-carbon-chevron-right text-sm" />
+          <view class="i-carbon-chevron-right text-base" />
         </view>
       </view>
 
-      <view v-if="agendaError && !agenda" class="flex flex-col items-center px-6 py-8 text-center">
-        <text class="i-carbon-warning-alt mb-2 text-3xl text-gray-300" />
-        <text class="text-sm text-gray-500 leading-6">{{ agendaError }}</text>
-        <button class="mt-4 rounded-full bg-blue-600 px-5 py-1.5 text-sm text-white" @click="reloadAgenda">
-          重试
-        </button>
-      </view>
+      <PageState v-if="agendaError && !agenda" :error="agendaError" @retry="reloadAgenda" />
       <AgendaList
         v-else
         :days="agendaDays"
         :loading="agendaLoading"
         :today="agenda?.from"
+        :empty-text="agendaEmptyText"
         @select="openOccurrence"
         @open-day="openDay"
       >
-        <template #empty>
-          <view class="flex flex-col items-center text-center">
-            <text class="i-carbon-calendar text-4xl text-gray-200" />
-            <text class="mt-2 text-sm text-gray-500">{{ agendaEmptyText }}</text>
-            <text class="mt-1 text-xs text-gray-400">{{ agendaEmptyHint }}</text>
-            <button class="mt-4 rounded-full bg-blue-600 px-5 py-1.5 text-sm text-white" @click="goImport">
-              导入课表
-            </button>
-          </view>
+        <template #empty-action>
+          <text class="mt-1 block text-xs text-fg-3">{{ agendaEmptyHint }}</text>
+          <button class="btn-secondary mt-4 btn-sm" @click="goImport">
+            导入课表
+          </button>
         </template>
       </AgendaList>
     </view>
 
     <!-- 最新发布：新活动 + 未读通知 -->
-    <view v-else>
-      <view v-if="feedLoading && feedItems.length === 0" class="flex items-center justify-center py-6 text-xs text-gray-400">
-        加载中…
-      </view>
-      <view v-else-if="feedItems.length === 0" class="flex flex-col items-center py-8 text-gray-400">
-        <text class="i-carbon-notification text-4xl text-gray-200" />
-        <text class="mt-2 text-sm">暂无新内容</text>
-      </view>
-      <view v-else class="mt-3">
+    <view v-else class="px-4 pb-6 pt-3">
+      <PageState
+        :loading="feedLoading && feedItems.length === 0"
+        :error="feedError"
+        :empty="feedItems.length === 0"
+        empty-icon="i-carbon-notification"
+        empty-text="还没有新内容"
+        @retry="reloadFeed"
+      >
         <template v-for="item in feedItems" :key="item.key">
           <ActivityCard
             v-if="item.type === 'activity'"
@@ -509,34 +497,28 @@ onMounted(async () => {
           />
           <view
             v-else
-            class="mb-4 flex items-start gap-3 border border-gray-100 rounded-2xl bg-white px-4 py-3 shadow-sm active:opacity-80"
-            @click="goNotifications"
+            class="mb-3 flex items-start gap-3 yp-card-flat active:bg-fill"
+            @click="openNotification(item.notification.id)"
           >
-            <view class="mt-0.5 h-8 w-8 flex shrink-0 items-center justify-center rounded-full bg-blue-50">
-              <view class="i-carbon-notification text-base text-blue-600" />
+            <view class="mt-0.5 h-64rpx w-64rpx flex shrink-0 items-center justify-center rounded-full bg-primary-light">
+              <view class="i-carbon-notification text-lg text-primary" />
             </view>
             <view class="min-w-0 flex-1">
               <view class="flex items-center gap-2">
-                <text class="min-w-0 flex-1 truncate text-sm text-gray-900 font-medium">
+                <text class="min-w-0 flex-1 truncate text-base text-fg-1 font-medium">
                   {{ item.notification.title_display }}
                 </text>
-                <text class="shrink-0 text-2xs text-gray-400">{{ relativeTime(item.notification.start_time) }}</text>
+                <StatusTag type="processing" dot text="未读" class="shrink-0" />
               </view>
-              <text class="mt-0.5 block truncate text-xs text-gray-500">{{ notificationMeta(item.notification) }}</text>
+              <text class="mt-1 block truncate text-sm text-fg-2">{{ notificationMeta(item.notification) }}</text>
+              <text class="mt-1 block text-xs text-fg-3">{{ formatRelativeTime(item.notification.start_time) }}</text>
             </view>
-            <view class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500" />
           </view>
         </template>
-      </view>
+      </PageState>
     </view>
   </view>
 
   <!-- 日程筛选：来源与标签 -->
   <AgendaFilterSheet ref="filterSheet" :settings="settings" :saving="filterSaving" @save="saveFilter" />
 </template>
-
-<style lang="scss" scoped>
-button::after {
-  border: none;
-}
-</style>

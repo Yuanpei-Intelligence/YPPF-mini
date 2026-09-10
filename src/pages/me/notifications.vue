@@ -1,34 +1,45 @@
-<!-- 这一页真应该改成分页显示，卡死了这个玩意，有些人不喜欢点掉未读一攒好几百条 -->
 <script lang="ts" setup>
-import type { Notification, NotificationListQuery } from '@/api/types/notification'
+import type { Notification, NotificationBulkOperationResult, NotificationListQuery } from '@/api/types/notification'
 import type { UvToastInstance } from '@/hooks/useApiException'
+import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app'
 import { computed, onMounted, ref } from 'vue'
 import {
   deleteAllReadNotifications,
+  getNotification,
   getNotificationStatistics,
   listNotifications,
   markAllNotificationsRead,
   toggleNotificationStatus,
 } from '@/api/notification'
 import { NotificationStatus, NotificationType } from '@/api/types/notification'
+import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
+import { useConfirm } from '@/hooks/useConfirm'
+import { tokens } from '@/style/tokens'
+import { formatRelativeTime } from '@/utils/format'
+
+/*
+ * 通知中心。后端 `GET /api/v2/notification/` 目前没有分页（AGENTS.md「notification slice」），
+ * 因此一次拉全量；列表用普通 view 渲染，交给页面自身滚动。
+ */
 
 definePage({
   style: {
     navigationBarTitleText: '通知中心',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
+    enablePullDownRefresh: true,
   },
 })
 
-interface UvModalInstance {
-  open: () => void
-  close: () => void
-}
+type FilterKey = 'all' | 'unread' | 'read'
 
-type BulkAction = 'deleteAllRead' | 'markAllRead'
+const FILTERS: { key: FilterKey, name: string }[] = [
+  { key: 'all', name: '全部' },
+  { key: 'unread', name: '未读' },
+  { key: 'read', name: '已读' },
+]
+const filterNames = FILTERS.map(item => item.name)
 
-// 状态管理
 const notifications = ref<Notification[]>([])
 const statistics = ref({
   total: 0,
@@ -38,176 +49,203 @@ const statistics = ref({
   need_do: 0,
 })
 const loading = ref(false)
-const refreshing = ref(false)
+/** 首屏（或切换筛选后）列表加载失败的页内错误；已有数据时失败只 toast */
+const loadError = ref('')
+const bulkPending = ref(false)
+const togglingId = ref<number | null>(null)
+const filterIndex = ref(0)
+const activeFilter = computed<FilterKey>(() => FILTERS[filterIndex.value]?.key ?? 'all')
 const toastRef = ref<UvToastInstance | null>(null)
-const confirmationModalRef = ref<UvModalInstance | null>(null)
-const detailModalRef = ref<UvModalInstance | null>(null)
-const pendingBulkAction = ref<BulkAction | null>(null)
-const selectedNotification = ref<Notification | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
+const { confirm } = useConfirm()
 
-const confirmationContent = computed(() => (
-  pendingBulkAction.value === 'markAllRead'
-    ? '确定要将所有通知标记为已读吗？'
-    : '确定要删除所有已读通知吗？'
-))
-const detailConfirmText = computed(() => (
-  selectedNotification.value?.status === NotificationStatus.UNDONE
-    ? '标记已读'
-    : '知道了'
-))
+/** 从首页「最新发布」带 id 进入时，列表加载完直接展开这一条 */
+let pendingOpenId: number | null = null
 
-// 筛选状态
-const activeTab = ref<'all' | 'unread' | 'read'>('all')
+function isUnread(notification: Notification): boolean {
+  return notification.status === NotificationStatus.UNDONE
+}
 
-// 加载通知列表
-async function loadNotifications() {
+function queryFor(filter: FilterKey): NotificationListQuery {
+  const query: NotificationListQuery = { ordering: '-start_time' }
+  if (filter === 'unread')
+    query.status = NotificationStatus.UNDONE
+  else if (filter === 'read')
+    query.status = NotificationStatus.DONE
+  return query
+}
+
+let loadSeq = 0
+
+/**
+ * 拉取当前筛选下的列表。没有可显示的数据时失败改为页内错误并返回 null；
+ * 已有数据时保留数据并把错误交给调用方合并提示。
+ */
+async function loadNotifications(): Promise<unknown> {
+  const seq = ++loadSeq
+  loading.value = true
   try {
-    loading.value = true
-    const query: NotificationListQuery = {
-      ordering: '-start_time',
+    const items = await listNotifications(queryFor(activeFilter.value))
+    if (seq === loadSeq) {
+      notifications.value = items
+      loadError.value = ''
     }
-
-    // 根据选中的 tab 设置状态筛选
-    if (activeTab.value === 'unread') {
-      query.status = NotificationStatus.UNDONE
-    }
-    else if (activeTab.value === 'read') {
-      query.status = NotificationStatus.DONE
-    }
-
-    notifications.value = await listNotifications(query)
+    return null
   }
   catch (error) {
-    console.error('加载通知失败:', error)
+    if (seq !== loadSeq)
+      return null
+    if (notifications.value.length > 0)
+      return error
+    loadError.value = handleApiException(error, { showToast: false }).message
+    return null
+  }
+  finally {
+    if (seq === loadSeq)
+      loading.value = false
+  }
+}
+
+async function loadStatistics(): Promise<unknown> {
+  try {
+    statistics.value = await getNotificationStatistics()
+    return null
+  }
+  catch (error) {
+    return error
+  }
+}
+
+/** 列表与统计一起刷新；两路同时失败只提示一次，列表已改为页内错误时统计失败静默 */
+async function refreshAll() {
+  const [listFailure, statsFailure] = await Promise.all([loadNotifications(), loadStatistics()])
+  const failure = listFailure ?? (loadError.value ? null : statsFailure)
+  if (failure) {
+    console.error('加载通知失败:', failure)
+    handleApiException(failure)
+  }
+}
+
+function onFilterChange(index: number) {
+  if (index === filterIndex.value)
+    return
+  filterIndex.value = index
+  notifications.value = []
+  loadError.value = ''
+  void refreshAll()
+}
+
+// 切换通知状态（已读 <-> 未读）
+async function toggleStatus(notification: Notification) {
+  if (togglingId.value === notification.id)
+    return
+  togglingId.value = notification.id
+  try {
+    const updated = await toggleNotificationStatus(notification.id)
+    const index = notifications.value.findIndex(item => item.id === notification.id)
+    if (index !== -1)
+      notifications.value[index] = updated
+    const statsFailure = await loadStatistics()
+    if (statsFailure)
+      handleApiException(statsFailure)
+  }
+  catch (error) {
+    console.error('切换通知状态失败:', error)
     handleApiException(error)
   }
   finally {
-    loading.value = false
+    togglingId.value = null
   }
 }
 
-// 加载统计数据
-async function loadStatistics() {
-  try {
-    statistics.value = await getNotificationStatistics()
-  }
-  catch (error) {
-    console.error('加载统计失败:', error)
-    handleApiException(error)
-  }
-}
-
-// 切换通知状态
-async function handleToggleStatus(notification: Notification) {
-  try {
-    const updated = await toggleNotificationStatus(notification.id)
-    // 更新本地数据
-    const index = notifications.value.findIndex(n => n.id === notification.id)
-    if (index !== -1) {
-      notifications.value[index] = updated
-    }
-    // 刷新统计
-    await loadStatistics()
-  }
-  catch (error) {
-    console.error('切换状态失败:', error)
-    handleApiException(error)
-  }
-}
-
-// 标记所有为已读
-function handleMarkAllRead() {
-  pendingBulkAction.value = 'markAllRead'
-  confirmationModalRef.value?.open()
-}
-
-// 删除所有已读通知
-function handleDeleteAllRead() {
-  pendingBulkAction.value = 'deleteAllRead'
-  confirmationModalRef.value?.open()
-}
-
-async function confirmBulkAction() {
-  const action = pendingBulkAction.value
-  if (!action)
+async function runBulk(action: () => Promise<NotificationBulkOperationResult>, describe: (count: number) => string) {
+  if (bulkPending.value)
     return
-
+  bulkPending.value = true
   try {
-    const result = action === 'markAllRead'
-      ? await markAllNotificationsRead()
-      : await deleteAllReadNotifications()
-    showMessage(result.message, 'success')
-    await Promise.all([loadNotifications(), loadStatistics()])
+    const result = await action()
+    showMessage(describe(result.count), 'success')
+    await refreshAll()
   }
   catch (error) {
     console.error('批量修改通知失败:', error)
     handleApiException(error)
   }
   finally {
-    pendingBulkAction.value = null
-    confirmationModalRef.value?.close()
+    bulkPending.value = false
   }
 }
 
-// 查看通知详情
-function handleViewDetail(notification: Notification) {
-  selectedNotification.value = notification
-  detailModalRef.value?.open()
+async function handleMarkAllRead() {
+  const ok = await confirm({
+    title: '全部标为已读',
+    content: '将把所有未读通知标为已读，需处理的通知不受影响。',
+    confirmText: '全部已读',
+    cancelText: '暂不',
+  })
+  if (!ok)
+    return
+  await runBulk(markAllNotificationsRead, count => `已标为已读 ${count} 条`)
 }
 
-async function confirmNotificationDetail() {
-  const notification = selectedNotification.value
-  selectedNotification.value = null
-  if (notification?.status === NotificationStatus.UNDONE)
-    await handleToggleStatus(notification)
+async function handleDeleteAllRead() {
+  const ok = await confirm({
+    title: '删除已读通知',
+    content: '将删除所有已读通知，需处理的通知不受影响。删除后不可恢复。',
+    confirmText: '删除',
+    cancelText: '保留',
+    danger: true,
+  })
+  if (!ok)
+    return
+  await runBulk(deleteAllReadNotifications, count => `已删除 ${count} 条`)
 }
 
-// 下拉刷新
-async function onRefresh() {
-  try {
-    refreshing.value = true
-    await Promise.all([loadNotifications(), loadStatistics()])
-  }
-  finally {
-    refreshing.value = false
-  }
+/** 查看通知详情；未读的看完可直接标为已读 */
+async function openDetail(notification: Notification) {
+  const unread = isUnread(notification)
+  const ok = await confirm({
+    title: notification.title_display || '通知详情',
+    content: notification.content,
+    confirmText: unread ? '标为已读' : '知道了',
+    cancelText: '关闭',
+    showCancel: unread,
+  })
+  if (ok && unread)
+    await toggleStatus(notification)
 }
 
-// 切换标签
-function handleTabChange(tab: 'all' | 'unread' | 'read') {
-  activeTab.value = tab
-  loadNotifications()
+async function openPendingNotification() {
+  const id = pendingOpenId
+  pendingOpenId = null
+  if (!id)
+    return
+  let target = notifications.value.find(item => item.id === id)
+  if (!target) {
+    try {
+      target = await getNotification(id)
+    }
+    catch (error) {
+      handleApiException(error)
+      return
+    }
+  }
+  await openDetail(target)
 }
 
-// 格式化时间
-function formatTime(time: string) {
-  const date = new Date(time)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const minute = 60 * 1000
-  const hour = 60 * minute
-  const day = 24 * hour
-
-  if (diff < minute) {
-    return '刚刚'
-  }
-  else if (diff < hour) {
-    return `${Math.floor(diff / minute)}分钟前`
-  }
-  else if (diff < day) {
-    return `${Math.floor(diff / hour)}小时前`
-  }
-  else if (diff < 7 * day) {
-    return `${Math.floor(diff / day)}天前`
-  }
-  else {
-    return `${date.getMonth() + 1}-${date.getDate()}`
-  }
+function actionLabel(notification: Notification): string {
+  if (notification.typename === NotificationType.NEEDDO)
+    return '去处理'
+  return isUnread(notification) ? '标为已读' : '标为未读'
 }
 
-async function handleNotificationAction(notification: Notification) {
-  // 需处理类型：跳转处理并顺便标记已读
+function metaOf(notification: Notification): string {
+  const sender = notification.anonymous_flag ? '' : notification.sender_name
+  return [sender, formatRelativeTime(notification.start_time), notification.status_display].filter(Boolean).join(' · ')
+}
+
+async function handleAction(notification: Notification) {
+  // 需处理类型：复制处理链接并顺便标记已读
   if (notification.typename === NotificationType.NEEDDO) {
     if (notification.URL) {
       uni.setClipboardData({
@@ -216,184 +254,121 @@ async function handleNotificationAction(notification: Notification) {
           showMessage('链接已复制', 'success')
         },
         fail: () => {
-          showMessage('复制链接失败，请稍后重试。', 'error')
+          showMessage('复制链接失败', 'error')
         },
       })
     }
     else {
       showMessage('暂无处理链接', 'warning')
     }
-    if (notification.status === NotificationStatus.UNDONE) {
-      await handleToggleStatus(notification)
-    }
+    if (isUnread(notification))
+      await toggleStatus(notification)
     return
   }
 
   // 其他类型默认切换已读/未读
-  await handleToggleStatus(notification)
+  await toggleStatus(notification)
 }
 
-// 页面加载
-onMounted(() => {
-  loadNotifications()
-  loadStatistics()
+onLoad((options) => {
+  const id = Number(options?.id)
+  if (Number.isInteger(id) && id > 0)
+    pendingOpenId = id
+})
+
+onMounted(async () => {
+  await refreshAll()
+  await openPendingNotification()
+})
+
+onPullDownRefresh(async () => {
+  await refreshAll()
+  uni.stopPullDownRefresh()
 })
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-20">
+  <view class="yp-page">
     <uv-toast ref="toastRef" />
-    <uv-modal
-      ref="confirmationModalRef"
-      title="请确认"
-      :content="confirmationContent"
-      show-cancel-button
-      @confirm="confirmBulkAction"
-      @cancel="pendingBulkAction = null"
-    />
-    <uv-modal
-      ref="detailModalRef"
-      :title="selectedNotification?.title_display || '通知详情'"
-      :content="selectedNotification?.content || ''"
-      :confirm-text="detailConfirmText"
-      @confirm="confirmNotificationDetail"
-      @close="selectedNotification = null"
-    />
-    <!-- 筛选标签 -->
-    <view class="sticky top-0 z-10 bg-white px-4 py-3 shadow-sm">
-      <view class="mb-3 flex items-center justify-between">
-        <view class="flex gap-2">
-          <view
-            class="cursor-pointer rounded-full px-4 py-1.5 text-sm transition"
-            :class="activeTab === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'"
-            @click="handleTabChange('all')"
-          >
-            全部
-          </view>
-          <view
-            class="cursor-pointer rounded-full px-4 py-1.5 text-sm transition"
-            :class="activeTab === 'unread' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'"
-            @click="handleTabChange('unread')"
-          >
-            未读 ({{ statistics.unread }})
-          </view>
-          <view
-            class="cursor-pointer rounded-full px-4 py-1.5 text-sm transition"
-            :class="activeTab === 'read' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'"
-            @click="handleTabChange('read')"
-          >
-            已读 ({{ statistics.read }})
-          </view>
-        </view>
-        <view
-          class="cursor-pointer rounded-full p-2 text-blue-600 active:bg-blue-50"
-          :class="{ 'opacity-60': refreshing }"
-          @click="onRefresh"
-        >
-          <view class="i-carbon-renew text-lg" />
-        </view>
-      </view>
 
-      <!-- 操作按钮 -->
-      <view class="mx-4 mt-3 flex gap-2">
-        <view
-          class="flex-1 cursor-pointer rounded-lg bg-blue-50 px-3 py-2 text-center text-sm text-blue-600 active:bg-blue-100"
-          @click="handleMarkAllRead"
-        >
-          全部已读
-        </view>
-        <view
-          class="flex-1 cursor-pointer rounded-lg bg-red-50 px-3 py-2 text-center text-sm text-red-600 active:bg-red-100"
-          @click="handleDeleteAllRead"
-        >
-          删除已读
+    <!-- 筛选 + 工具栏 -->
+    <view class="bg-card px-4 pb-1 pt-3">
+      <uv-subsection
+        :list="filterNames"
+        :current="filterIndex"
+        mode="subsection"
+        :active-color="tokens.primary"
+        :inactive-color="tokens.text2"
+        :font-size="14"
+        :bold="false"
+        @change="onFilterChange"
+      />
+      <view class="mt-1 flex items-center justify-between gap-2">
+        <text class="min-w-0 flex-1 truncate text-xs text-fg-3 tabular-nums">未读 {{ statistics.unread }} 条 · 共 {{ statistics.total }} 条</text>
+        <view class="flex shrink-0 items-center">
+          <view class="btn-text min-h-88rpx" :class="{ 'opacity-50': bulkPending }" @click="handleMarkAllRead">
+            全部已读
+          </view>
+          <view class="btn-text min-h-88rpx text-error" :class="{ 'opacity-50': bulkPending }" @click="handleDeleteAllRead">
+            删除已读
+          </view>
         </view>
       </view>
     </view>
 
     <!-- 通知列表 -->
-    <scroll-view scroll-y class="mt-3 box-border px-4">
-      <view v-if="loading" class="py-20 text-center text-gray-400">
-        <uv-loading-icon mode="circle" text="加载中" />
-      </view>
-
-      <view v-else-if="notifications.length === 0" class="py-20 text-center text-gray-400">
-        <view class="i-carbon-email mx-auto mb-3 text-6xl text-gray-300" />
-        <view>暂无通知</view>
-      </view>
-
-      <view v-else class="box-border w-full pb-4 space-y-2">
-        <view
-          v-for="notification in notifications"
-          :key="notification.id"
-          class="relative box-border w-full overflow-hidden rounded-xl p-4 shadow-sm active:bg-gray-50"
-          :class="notification.status === NotificationStatus.UNDONE ? 'bg-white' : 'bg-gray-100 text-gray-500'"
-          @click="handleViewDetail(notification)"
-        >
-          <!-- 未读标记 -->
-          <view
-            v-if="notification.status === NotificationStatus.UNDONE"
-            class="absolute right-3 top-3 h-2 w-2 rounded-full bg-red-500"
-          />
-
-          <!-- 标题 -->
-          <view
-            class="mb-2 text-base font-bold"
-            :class="notification.status === NotificationStatus.UNDONE ? 'text-gray-800' : 'text-gray-500'"
-          >
-            {{ notification.title_display }}
-          </view>
-
-          <!-- 头部 -->
-          <view class="mb-2 flex items-center justify-between">
-            <view class="flex items-center gap-2">
-              <view
-                v-if="!notification.anonymous_flag"
-                class="text-xs text-gray-500"
+    <PageState
+      :loading="loading && notifications.length === 0"
+      :error="loadError"
+      :empty="notifications.length === 0"
+      empty-icon="i-carbon-notification"
+      empty-text="还没有通知"
+      @retry="refreshAll"
+    >
+      <view class="mt-3 bg-card">
+        <template v-for="(notification, index) in notifications" :key="notification.id">
+          <view v-if="index > 0" class="yp-divider" />
+          <view class="flex items-start gap-3 px-4 py-3 active:bg-fill" @click="openDetail(notification)">
+            <!-- 未读左侧色点 -->
+            <view
+              class="mt-3 h-14rpx w-14rpx shrink-0 rounded-full"
+              :class="isUnread(notification) ? 'bg-primary' : 'bg-transparent'"
+            />
+            <view class="min-w-0 flex-1">
+              <view class="flex items-start gap-2">
+                <text
+                  class="line-clamp-2 min-w-0 flex-1 text-base"
+                  :class="isUnread(notification) ? 'text-fg-1 font-medium' : 'text-fg-2'"
+                >
+                  {{ notification.title_display }}
+                </text>
+                <StatusTag
+                  v-if="notification.typename === NotificationType.NEEDDO"
+                  :type="isUnread(notification) ? 'warning' : 'default'"
+                  text="需处理"
+                  class="mt-1 shrink-0"
+                />
+              </view>
+              <text
+                class="line-clamp-2 mt-1 block text-sm"
+                :class="isUnread(notification) ? 'text-fg-2' : 'text-fg-3'"
               >
-                {{ notification.sender_name }}
+                {{ notification.content }}
+              </text>
+              <view class="mt-1 flex items-center justify-between gap-2">
+                <text class="min-w-0 flex-1 truncate text-xs text-fg-3">{{ metaOf(notification) }}</text>
+                <view
+                  class="btn-text min-h-88rpx shrink-0 -mr-2"
+                  :class="{ 'opacity-50': togglingId === notification.id }"
+                  @click.stop="handleAction(notification)"
+                >
+                  {{ actionLabel(notification) }}
+                </view>
               </view>
             </view>
-            <view class="text-xs text-gray-400">
-              {{ formatTime(notification.start_time) }}
-            </view>
           </view>
-
-          <!-- 内容 -->
-          <view
-            class="line-clamp-2 text-sm"
-            :class="notification.status === NotificationStatus.UNDONE ? 'text-gray-600' : 'text-gray-500'"
-          >
-            {{ notification.content }}
-          </view>
-
-          <!-- 底部操作 -->
-          <view class="mt-3 flex items-center justify-between border-t border-gray-100 pt-3">
-            <view
-              class="text-xs"
-              :class="notification.status === NotificationStatus.UNDONE ? 'text-gray-400' : 'text-gray-500'
-              "
-            >
-              {{ notification.status_display }}
-            </view>
-            <view
-              class="cursor-pointer rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-600 active:bg-blue-100"
-              @click.stop="handleNotificationAction(notification)"
-            >
-              {{ notification.typename === NotificationType.NEEDDO ? '去处理' : notification.status === NotificationStatus.UNDONE ? '标为已读' : '标为未读' }}
-            </view>
-          </view>
-        </view>
+        </template>
       </view>
-    </scroll-view>
+    </PageState>
   </view>
 </template>
-
-<style lang="scss" scoped>
-.line-clamp-2 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-</style>

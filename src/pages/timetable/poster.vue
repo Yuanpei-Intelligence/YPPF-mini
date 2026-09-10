@@ -10,6 +10,7 @@ import { getShareAssets } from '@/api/share'
 import { getSettings, getWeek } from '@/api/timetable'
 import { useApiException } from '@/hooks/useApiException'
 import { useUserStore } from '@/store/user'
+import { tokens } from '@/style/tokens'
 import { debounce } from '@/utils/debounce'
 import { confirmModal } from '@/utils/dialog'
 import {
@@ -42,8 +43,6 @@ import {
 definePage({
   style: {
     navigationBarTitleText: '课表海报',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
   },
 })
 
@@ -488,7 +487,7 @@ function drawHeader(ctx: CanvasRenderingContext2D, data: WeekView, theme: Poster
   ctx.textBaseline = 'top'
   if (onBand) {
     ctx.textAlign = 'right'
-    ctx.fillStyle = withAlpha('#ffffff', 0.32)
+    ctx.fillStyle = withAlpha(tokens.textInverse, 0.32)
     setFont(ctx, 44, 'bold')
     const numeral = String(data.week)
     const numeralWidth = ctx.measureText(numeral).width
@@ -994,20 +993,15 @@ onShareAppMessage(() => ({
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-10">
+  <view class="min-h-screen bg-page pb-10">
     <uv-toast ref="toastRef" />
-    <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
-      <uv-loading-icon mode="circle" />
-      <text class="mt-3">正在生成海报…</text>
-    </view>
-
-    <view v-else-if="loadError" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-warning-alt mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="load">
-        重试
-      </button>
-    </view>
+    <PageState
+      v-if="loading || loadError"
+      :loading="loading"
+      :error="loadError"
+      loading-text="正在生成海报…"
+      @retry="load"
+    />
 
     <view v-else class="px-3 pt-3">
       <!-- 风格 -->
@@ -1017,31 +1011,31 @@ onShareAppMessage(() => ({
             v-for="item in themeOptions"
             :key="item.key"
             class="flex shrink-0 items-center gap-1.5 border rounded-full px-3 py-1.5 text-xs"
-            :class="item.key === themeKey ? 'border-blue-500 bg-blue-50 text-blue-600 font-medium' : 'border-gray-200 bg-white text-gray-600'"
+            :class="item.key === themeKey ? 'border-primary bg-primary-light text-primary font-medium' : 'border-line bg-card text-fg-2'"
             @click="selectTheme(item.key)"
           >
-            <view class="h-4 w-4 border border-gray-200 rounded-full" :style="swatchStyle(item)" />
+            <view class="h-4 w-4 border border-line rounded-full" :style="swatchStyle(item)" />
             <text>{{ item.labels.name }}</text>
           </view>
         </view>
       </scroll-view>
-      <text class="mt-1 block px-1 text-2xs text-gray-400">{{ theme.labels.description }}</text>
+      <text class="mt-1 block px-1 text-2xs text-fg-3">{{ theme.labels.description }}</text>
 
       <!-- 开关 -->
-      <view class="mt-2 flex items-center justify-end gap-5 rounded-xl bg-white px-4 py-2.5 shadow-sm">
+      <view class="mt-2 flex items-center justify-end gap-5 rounded-lg bg-card px-4 py-2.5 shadow-card">
         <view v-if="hasAssets" class="flex items-center gap-2">
-          <text class="text-sm text-gray-700">附二维码</text>
-          <uv-switch :model-value="withQr" size="20" active-color="#2563eb" @change="handleQrChange" />
+          <text class="text-sm text-fg-2">附二维码</text>
+          <uv-switch :model-value="withQr" size="20" :active-color="tokens.primary" @change="handleQrChange" />
         </view>
         <view class="flex items-center gap-2">
-          <text class="text-sm text-gray-700">显示姓名</text>
-          <uv-switch :model-value="showName" size="20" active-color="#2563eb" @change="handleShowNameChange" />
+          <text class="text-sm text-fg-2">显示姓名</text>
+          <uv-switch :model-value="showName" size="20" :active-color="tokens.primary" @change="handleShowNameChange" />
         </view>
       </view>
 
       <!-- 海报 -->
       <view class="mt-3 flex flex-col items-center">
-        <view class="overflow-hidden rounded-2xl shadow-lg">
+        <view class="overflow-hidden rounded-lg shadow-float">
           <canvas
             id="poster"
             type="2d"
@@ -1049,13 +1043,13 @@ onShareAppMessage(() => ({
             :style="{ width: `${canvasSize.width}px`, height: `${canvasSize.height}px` }"
           />
         </view>
-        <text v-if="renderError" class="mt-3 text-sm text-red-500">{{ renderError }}</text>
-        <text v-else-if="rendering" class="mt-3 text-xs text-gray-400">正在绘制…</text>
+        <text v-if="renderError" class="mt-3 text-sm text-error">{{ renderError }}</text>
+        <text v-else-if="rendering" class="mt-3 text-xs text-fg-3">正在绘制…</text>
       </view>
 
       <view class="mt-4 flex gap-3">
         <button
-          class="flex-1 rounded-xl bg-blue-500 py-3 text-base text-white font-medium"
+          class="btn-primary flex-1"
           :disabled="saving || rendering || !!renderError"
           @click="handleSave"
         >
@@ -1063,20 +1057,14 @@ onShareAppMessage(() => ({
         </button>
         <button
           open-type="share"
-          class="flex-1 border border-blue-500 rounded-xl bg-white py-3 text-base text-blue-600 font-medium"
+          class="btn-secondary flex-1"
         >
           分享给朋友
         </button>
       </view>
-      <text class="mt-3 block text-center text-2xs text-gray-400">
+      <text class="mt-3 block text-center text-2xs text-fg-3">
         保存后可发朋友圈；「分享给朋友」发送课表入口，附海报顶部缩略图
       </text>
     </view>
   </view>
 </template>
-
-<style lang="scss" scoped>
-button::after {
-  border: none;
-}
-</style>

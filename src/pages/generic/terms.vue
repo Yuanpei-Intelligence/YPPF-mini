@@ -75,24 +75,24 @@ definePage({
 </template>
 
 <style lang="scss" scoped>
+/* 法务文本只调排版，颜色/字号/圆角全部取设计令牌（src/uni.scss） */
 .terms-page {
   min-height: 100vh;
-  padding: 24rpx;
+  padding: $yp-space-section $yp-space-gutter 48rpx;
   box-sizing: border-box;
-  background: linear-gradient(180deg, #f3f7ff 0%, #eef3f8 100%);
+  background: var(--yp-bg-page);
   overflow-x: hidden;
 }
 
 .terms-card {
   width: 100%;
-  padding: 36rpx 28rpx 44rpx;
+  padding: $yp-space-card;
   box-sizing: border-box;
-  border-radius: 24rpx;
-  background: #ffffff;
-  box-shadow: 0 8rpx 24rpx rgba(15, 23, 42, 0.05);
-  font-size: 28rpx;
-  line-height: 1.8;
-  color: #334155;
+  border-radius: var(--yp-radius-lg);
+  background: var(--yp-bg-card);
+  font-size: var(--yp-font-base);
+  line-height: 1.75;
+  color: var(--yp-text-2);
 }
 
 .main-title,
@@ -100,51 +100,41 @@ definePage({
 .subsection-title,
 .content {
   display: block;
-}
-
-.main-title,
-.section-title,
-.subsection-title,
-.content {
   max-width: 100%;
   box-sizing: border-box;
   white-space: normal;
   word-break: break-word;
   overflow-wrap: break-word;
+  text-align: left;
 }
 
 .main-title {
-  margin-bottom: 28rpx;
-  font-size: 34rpx;
+  margin-bottom: 24rpx;
+  font-size: var(--yp-font-xl);
   font-weight: 600;
-  line-height: 1.6;
-  text-align: left;
-  color: #1e293b;
+  line-height: 1.4;
+  color: var(--yp-text-1);
 }
 
 .section-title {
-  margin-top: 28rpx;
-  margin-bottom: 18rpx;
-  padding: 12rpx 18rpx;
-  border-radius: 12rpx;
-  background: #eff6ff;
-  font-size: 32rpx;
-  font-weight: 700;
-  line-height: 1.5;
-  color: #1d4ed8;
+  margin-top: 40rpx;
+  margin-bottom: 16rpx;
+  font-size: var(--yp-font-lg);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--yp-text-1);
 }
 
 .subsection-title {
-  margin-top: 20rpx;
-  margin-bottom: 10rpx;
-  font-size: 28rpx;
+  margin-top: 24rpx;
+  margin-bottom: 8rpx;
+  font-size: var(--yp-font-base);
   font-weight: 600;
-  line-height: 1.6;
-  color: #1e293b;
+  line-height: 1.5;
+  color: var(--yp-text-1);
 }
 
 .content {
   margin-bottom: 12rpx;
-  text-align: left;
 }
 </style>
