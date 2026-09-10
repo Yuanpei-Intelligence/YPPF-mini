@@ -80,6 +80,9 @@ export default defineConfig(({ command, mode }) => {
         // 是个数组，可以配置多个，但是不能为pages里面的目录！！
         subPackages: [
           'src/pages-auth', // 这个是必要的路由，包括登录页、注册页
+          // Secondary timetable pages; pages/timetable/index stays in the main package because
+          // backend shares, subscribe messages and the mini-program code link to it.
+          'src/pages-timetable',
         ],
         dts: 'src/types/uni-pages.d.ts',
       }),

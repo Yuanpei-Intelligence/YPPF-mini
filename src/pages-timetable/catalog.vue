@@ -130,7 +130,7 @@ function goManual(entry: CatalogEntry) {
     return
   saveCatalogPick({ ...entry, slots: Array.isArray(entry.slots) ? entry.slots : [] })
   uni.navigateTo({
-    url: `/pages/timetable/entry-form?catalog_id=${entry.id}&term=${encodeURIComponent(term.value.code)}`,
+    url: `/pages-timetable/entry-form?catalog_id=${entry.id}&term=${encodeURIComponent(term.value.code)}`,
   })
 }
 

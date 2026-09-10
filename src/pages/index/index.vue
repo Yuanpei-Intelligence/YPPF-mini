@@ -216,7 +216,7 @@ function openOccurrence(item: Occurrence) {
 }
 
 function openDay(date: string) {
-  uni.navigateTo({ url: `/pages/timetable/day?date=${encodeURIComponent(date)}` })
+  uni.navigateTo({ url: `/pages-timetable/day?date=${encodeURIComponent(date)}` })
 }
 
 function goTimetable() {
@@ -224,7 +224,7 @@ function goTimetable() {
 }
 
 function goImport() {
-  uni.navigateTo({ url: '/pages/timetable/import' })
+  uni.navigateTo({ url: '/pages-timetable/import' })
 }
 
 /* -------------------- 最新发布 -------------------- */
