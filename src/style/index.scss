@@ -57,12 +57,6 @@ page {
   --yp-shadow-card: #{$yp-shadow-card};
   --yp-shadow-float: #{$yp-shadow-float};
 
-  // wot-design-uni bridge for the few legacy `wd-*` usages still around.
-  --wot-color-theme: #{$yp-color-primary};
-  --wot-color-success: #{$yp-color-success};
-  --wot-color-warning: #{$yp-color-warning};
-  --wot-color-danger: #{$yp-color-error};
-
   background-color: var(--yp-bg-page);
   color: var(--yp-text-1);
   font-family: $yp-font-family;
