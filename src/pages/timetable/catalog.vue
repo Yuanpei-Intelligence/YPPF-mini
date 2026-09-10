@@ -12,8 +12,6 @@ import { describeCatalogMeta, describeCourseCode, describeSlot, saveCatalogPick 
 definePage({
   style: {
     navigationBarTitleText: '课程库',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
   },
 })
 
@@ -233,26 +231,21 @@ onLoad((options) => {
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-10">
+  <view class="min-h-screen bg-page pb-10">
     <uv-toast ref="toastRef" />
-    <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
-      <uv-loading-icon mode="circle" />
-      <text class="mt-3">正在加载…</text>
-    </view>
-
-    <view v-else-if="loadError" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-warning-alt mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="load">
-        重试
-      </button>
-    </view>
+    <PageState
+      v-if="loading || loadError"
+      :loading="loading"
+      :error="loadError"
+      loading-text="正在加载…"
+      @retry="load"
+    />
 
     <template v-else>
       <!-- 搜索框 -->
-      <view class="sticky top-0 z-10 bg-gray-50 px-4 pb-2 pt-3">
+      <view class="sticky top-0 z-10 bg-page px-4 pb-2 pt-3">
         <view class="relative">
-          <text class="i-carbon-search absolute left-3 top-0 h-full flex items-center text-base text-gray-400" />
+          <text class="i-carbon-search absolute left-3 top-0 h-full flex items-center text-base text-fg-3" />
           <input
             v-model="query"
             class="search-input"
@@ -268,55 +261,55 @@ onLoad((options) => {
             class="absolute right-2 top-0 h-full flex items-center px-1"
             @click="clearQuery"
           >
-            <text class="i-carbon-close text-base text-gray-400" />
+            <text class="i-carbon-close text-base text-fg-3" />
           </view>
         </view>
-        <text class="mt-1 block text-2xs text-gray-400">{{ term?.name }} · 加入的课程按旁听标记，不影响选课</text>
+        <text class="mt-1 block text-2xs text-fg-3">{{ term?.name }} · 加入的课程按旁听标记，不影响选课</text>
       </view>
 
       <view class="px-4">
         <!-- 空状态 -->
         <view v-if="!query.trim()" class="flex flex-col items-center px-6 py-16 text-center">
-          <text class="i-carbon-catalog text-4xl text-gray-200" />
-          <text class="mt-2 text-sm text-gray-500">搜索本学期开设的课程</text>
-          <text class="mt-1 text-xs text-gray-400 leading-5">找到想旁听的课后点「添加为旁听」，它会以旁听标记出现在课表里；也可以用「手动填写」补充时间</text>
+          <text class="i-carbon-catalog text-4xl text-fg-4" />
+          <text class="mt-2 text-sm text-fg-2">搜索本学期开设的课程</text>
+          <text class="mt-1 text-xs text-fg-3 leading-5">找到想旁听的课后点「添加为旁听」，它会以旁听标记出现在课表里；也可以用「手动填写」补充时间</text>
         </view>
         <view v-else-if="searched && !searching && !cards.length" class="flex flex-col items-center px-6 py-16 text-center">
-          <text class="i-carbon-search text-4xl text-gray-200" />
-          <text class="mt-2 text-sm text-gray-500">没有找到匹配的课程</text>
-          <text class="mt-1 text-xs text-gray-400 leading-5">课程库只收录本学期开设的课程；换个关键词试试，或在课表页「添加 → 手动添加」自行填写</text>
+          <text class="i-carbon-search text-4xl text-fg-4" />
+          <text class="mt-2 text-sm text-fg-2">没有找到匹配的课程</text>
+          <text class="mt-1 text-xs text-fg-3 leading-5">课程库只收录本学期开设的课程；换个关键词试试，或在课表页「添加 → 手动添加」自行填写</text>
         </view>
 
         <!-- 结果 -->
         <view
           v-for="card in cards"
           :key="card.entry.id"
-          class="mb-3 rounded-2xl bg-white p-4 shadow-sm"
+          class="mb-3 yp-card"
         >
           <view class="flex items-start justify-between gap-2">
             <view class="min-w-0 flex-1">
-              <text class="block text-base text-gray-900 font-medium leading-6">{{ card.entry.name }}</text>
-              <text class="mt-0.5 block text-xs text-gray-500">
+              <text class="block text-base text-fg-1 font-medium leading-6">{{ card.entry.name }}</text>
+              <text class="mt-0.5 block text-xs text-fg-2">
                 {{ [card.code, card.entry.teacher].filter(Boolean).join(' · ') }}
               </text>
             </view>
-            <text v-if="card.added" class="shrink-0 rounded-full bg-green-50 px-2 py-0.5 text-2xs text-green-600">已在课表</text>
+            <StatusTag v-if="card.added" type="success" text="已在课表" class="shrink-0" />
           </view>
-          <text v-if="card.meta" class="mt-1 block text-xs text-gray-400">{{ card.meta }}</text>
-          <text v-if="card.entry.time_text" class="mt-1 block text-xs text-gray-600 leading-5">{{ card.entry.time_text }}</text>
-          <text v-if="card.entry.note" class="mt-1 block text-2xs text-gray-400 leading-4">{{ card.entry.note }}</text>
-          <text v-if="!card.slots.length" class="mt-1 block text-2xs text-amber-600">未能解析上课时间，需手动填写</text>
+          <text v-if="card.meta" class="mt-1 block text-xs text-fg-3">{{ card.meta }}</text>
+          <text v-if="card.entry.time_text" class="mt-1 block text-xs text-fg-2 leading-5">{{ card.entry.time_text }}</text>
+          <text v-if="card.entry.note" class="mt-1 block text-2xs text-fg-3 leading-4">{{ card.entry.note }}</text>
+          <text v-if="!card.slots.length" class="mt-1 block text-2xs text-warning">未能解析上课时间，需手动填写</text>
           <view class="mt-3 flex gap-3">
             <button
-              class="flex-1 rounded-lg py-2 text-sm font-medium"
-              :class="card.added ? 'bg-gray-100 text-gray-400' : 'bg-blue-500 text-white'"
+              class="btn-sm flex-1"
+              :class="card.added ? 'btn-ghost bg-fill text-fg-3' : 'btn-primary'"
               :disabled="card.added || addingId !== null"
               @click="handleAdd(card)"
             >
               {{ addingId === card.entry.id ? '添加中…' : card.added ? '已在课表' : card.slots.length > 1 ? `添加为旁听（${card.slots.length} 个时段）` : '添加为旁听' }}
             </button>
             <button
-              class="flex-1 border border-gray-200 rounded-lg bg-white py-2 text-sm text-gray-700 font-medium"
+              class="btn-outline btn-sm flex-1"
               :disabled="addingId !== null"
               @click="goManual(card.entry)"
             >
@@ -331,23 +324,23 @@ onLoad((options) => {
   <!-- 多个时段：勾选要加入的 -->
   <uv-popup ref="slotPopup" mode="bottom" :round="16" :safe-area-inset-bottom="true">
     <view v-if="slotTarget" class="px-5 pb-6 pt-5">
-      <text class="block text-base text-gray-900 font-bold">选择要加入的时段</text>
-      <text class="mt-1 block truncate text-xs text-gray-400">{{ slotTarget.name }} · 以旁听加入课表</text>
+      <text class="block text-base text-fg-1 font-bold">选择要加入的时段</text>
+      <text class="mt-1 block truncate text-xs text-fg-3">{{ slotTarget.name }} · 以旁听加入课表</text>
       <view class="mt-3">
         <view
           v-for="choice in slotChoices"
           :key="choice.index"
-          class="flex items-center gap-3 border-b border-gray-50 py-3 last:border-none"
+          class="flex items-center gap-3 border-b border-line-light py-3 last:border-none"
           @click="toggleSlot(choice.index)"
         >
           <view class="check-box" :class="{ 'check-box--checked': choice.checked }">
             <text v-if="choice.checked" class="i-carbon-checkmark text-xs text-white" />
           </view>
-          <text class="min-w-0 flex-1 text-sm text-gray-800">{{ choice.label }}</text>
+          <text class="min-w-0 flex-1 text-sm text-fg-1">{{ choice.label }}</text>
         </view>
       </view>
       <button
-        class="mt-4 w-full rounded-lg bg-blue-500 py-2.5 text-sm text-white font-medium"
+        class="btn-primary mt-4 btn-block"
         :disabled="!selectedSlotCount"
         @click="confirmSlots"
       >
@@ -363,11 +356,11 @@ onLoad((options) => {
   width: 100%;
   height: 80rpx;
   padding: 0 72rpx 0 68rpx;
-  font-size: 28rpx;
+  font-size: var(--yp-font-sm);
   line-height: 80rpx;
-  color: #1f2937;
-  background: #fff;
-  border: 2rpx solid #e5e7eb;
+  color: var(--yp-text-1);
+  background: var(--yp-bg-card);
+  border: 2rpx solid var(--yp-border);
   border-radius: 40rpx;
 }
 
@@ -378,16 +371,12 @@ onLoad((options) => {
   justify-content: center;
   width: 36rpx;
   height: 36rpx;
-  border: 2rpx solid #cbd5e1;
-  border-radius: 8rpx;
+  border: 2rpx solid var(--yp-border);
+  border-radius: var(--yp-radius-sm);
 
   &--checked {
-    background: #2563eb;
-    border-color: #2563eb;
+    background: var(--yp-color-primary);
+    border-color: var(--yp-color-primary);
   }
-}
-
-button::after {
-  border: none;
 }
 </style>
