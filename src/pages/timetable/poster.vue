@@ -164,6 +164,8 @@ const scheduleRender = debounce(() => {
 const themeOptions = POSTER_THEME_KEYS.map(key => POSTER_THEMES[key])
 const theme = computed(() => POSTER_THEMES[themeKey.value])
 const rows = computed(() => sectionRows(view.value?.term ?? null))
+/** 后端没配公众号二维码（或素材接口失败）时用打包在小程序里的同一张图；换图以后端配置为准，这份只是兜底 */
+const OFFICIAL_QR_FALLBACK = '/static/share/official_qrcode.png'
 const hasAssets = computed(() => !!(assets.value?.miniapp_qrcode || assets.value?.official_qrcode))
 const displayName = computed(() => (showName.value ? userStore.userInfo.name || '' : ''))
 const title = computed(() => (displayName.value ? `${displayName.value}的课表` : '我的课表'))
@@ -864,10 +866,13 @@ async function load() {
   // 分享素材单独请求：失败或过慢都不能挡住出图，晚到时由 watch 触发重绘补上二维码
   const assetsTask = getShareAssets()
     .then((result) => {
-      assets.value = result
-      withQr.value = !!(result.miniapp_qrcode || result.official_qrcode)
+      assets.value = { ...result, official_qrcode: result.official_qrcode || OFFICIAL_QR_FALLBACK }
+      withQr.value = true
     })
-    .catch(() => undefined)
+    .catch(() => {
+      assets.value = { miniapp_qrcode: null, official_qrcode: OFFICIAL_QR_FALLBACK, slogan: '' }
+      withQr.value = true
+    })
   try {
     const [weekData, settingsData] = await Promise.all([
       getWeek(query.value),
