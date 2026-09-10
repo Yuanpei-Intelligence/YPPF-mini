@@ -2,12 +2,16 @@ import { defineUniPages } from '@uni-helper/vite-plugin-uni-pages'
 import { tabBar } from './src/tabbar/config'
 
 export default defineUniPages({
+  // Every page uses the native navigation bar in the light style below; pages must not
+  // override the bar color individually (docs/design/README.md §3). Only pages that need
+  // custom content in the bar may set `navigationStyle: 'custom'`.
   globalStyle: {
     navigationStyle: 'default',
     navigationBarTitleText: 'YPPF',
-    navigationBarBackgroundColor: '#f8f8f8',
+    navigationBarBackgroundColor: '#FFFFFF',
     navigationBarTextStyle: 'black',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F5F6F8',
+    backgroundTextStyle: 'dark',
   },
   easycom: {
     autoscan: true,

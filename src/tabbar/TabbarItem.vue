@@ -20,28 +20,24 @@ function getImageByIndex(index: number, item: CustomTabBarItem) {
 <template>
   <view class="flex flex-col items-center justify-center">
     <template v-if="item.iconType === 'uiLib'">
-      <!-- TODO: 以下内容请根据选择的UI库自行替换 -->
-      <!-- 如：<wd-icon name="home" /> (https://wot-design-uni.cn/component/icon.html) -->
-      <!-- 如：<uv-icon name="home" /> (https://www.uvui.cn/components/icon.html) -->
-      <!-- 如：<sar-icon name="image" /> (https://sard.wzt.zone/sard-uniapp-docs/components/icon)(sar没有home图标^_^) -->
-      <!-- <wd-icon :name="item.icon" size="20" /> -->
+      <!-- 如需使用 UI 库图标，在此替换：<uv-icon :name="item.icon" size="22" /> -->
     </template>
     <template v-if="item.iconType === 'unocss' || item.iconType === 'iconfont'">
-      <view :class="[item.icon, isBulge ? 'text-80px' : 'text-20px']" />
+      <view :class="[item.icon, isBulge ? 'text-80px' : 'text-22px']" />
     </template>
     <template v-if="item.iconType === 'image'">
-      <image :src="getImageByIndex(index, item)" mode="scaleToFill" :class="isBulge ? 'h-80px w-80px' : 'h-24px w-24px'" />
+      <image :src="getImageByIndex(index, item)" mode="scaleToFill" :class="isBulge ? 'h-80px w-80px' : 'h-22px w-22px'" />
     </template>
-    <view v-if="!isBulge" class="mt-2px text-12px">
+    <view v-if="!isBulge" class="mt-2px text-2xs leading-none">
       {{ item.text }}
     </view>
     <!-- 角标显示 -->
     <view v-if="item.badge">
       <template v-if="item.badge === 'dot'">
-        <view class="absolute right-0 top-0 h-2 w-2 rounded-full bg-#f56c6c" />
+        <view class="absolute right-0 top-0 h-2 w-2 rounded-full bg-error" />
       </template>
       <template v-else>
-        <view class="absolute top-0 box-border h-5 min-w-5 center rounded-full bg-#f56c6c px-1 text-center text-xs text-white -right-3">
+        <view class="absolute top-0 box-border h-5 min-w-5 center rounded-full bg-error px-1 text-center text-2xs text-white -right-3">
           {{ item.badge > 99 ? '99+' : item.badge }}
         </view>
       </template>
