@@ -21,6 +21,7 @@ import { useApiException } from '@/hooks/useApiException'
 import { useClassReminder } from '@/hooks/useClassReminder'
 import { useConfirm } from '@/hooks/useConfirm'
 import { useTimetableSync } from '@/hooks/useTimetableSync'
+import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { confirmModal } from '@/utils/dialog'
 import {
@@ -69,12 +70,14 @@ const {
 const { confirm } = useConfirm()
 let scrollToSettings = false
 
+const userStore = useUserStore()
+
 // 北大账号
 const showLoginForm = ref(false)
 const username = ref('')
 const password = ref('')
 const consent = ref(false)
-const remember = ref(!!readPkuCredential())
+const remember = ref(!!readPkuCredential(userStore.userInfo.username))
 const formError = ref('')
 const importing = ref(false)
 const importResult = ref<ImportOut | null>(null)
@@ -190,7 +193,7 @@ async function load() {
     if (!selectedTerm.value || !termsData.terms.some(item => item.code === selectedTerm.value))
       selectedTerm.value = termsData.current?.code ?? termsData.terms[0]?.code ?? ''
     if (!username.value)
-      username.value = bindingData.pku_username || readPkuCredential()?.username || ''
+      username.value = bindingData.pku_username || readPkuCredential(userStore.userInfo.username)?.username || ''
   }
   catch (error) {
     loadError.value = handleApiException(error, { showToast: false }).message
@@ -239,9 +242,9 @@ async function handleLoginImport() {
       consent_timetable: true,
     })
     if (remember.value)
-      savePkuCredential({ username: user, password: pass })
+      savePkuCredential(userStore.userInfo.username, { username: user, password: pass })
     else
-      clearPkuCredential()
+      clearPkuCredential(userStore.userInfo.username)
     password.value = ''
     importResult.value = result
     showLoginForm.value = false
@@ -292,7 +295,7 @@ async function handleUnbind() {
   unbinding.value = true
   try {
     await pkuUnbind()
-    clearPkuCredential()
+    clearPkuCredential(userStore.userInfo.username)
     remember.value = false
     password.value = ''
     importResult.value = null

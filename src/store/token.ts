@@ -13,7 +13,7 @@ import {
 } from '@/api/login'
 import { isDoubleTokenRes, isSingleTokenRes } from '@/api/types/login'
 import { isDoubleTokenMode } from '@/utils'
-import { clearAgendaCache } from '@/utils/agenda-cache'
+import { clearPersonalStorage } from '@/utils/personal-storage'
 import { useUserStore } from './user'
 
 // 初始化状态
@@ -227,8 +227,8 @@ export const useTokenStore = defineStore(
         uni.removeStorageSync('refreshTokenExpireTime')
         tokenInfo.value = { ...tokenInfoState }
         uni.removeStorageSync('token')
-        // The home agenda cache holds this account's schedule
-        clearAgendaCache()
+        // Schedules, hidden events, reminder state and the remembered portal password of every account
+        clearPersonalStorage()
       }
     }
 

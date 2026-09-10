@@ -109,7 +109,7 @@ const agendaStale = computed(() => agendaFetchedOn.value !== '' && agendaFetched
 const settings = ref<Settings | null>(null)
 const filterSheet = ref<FilterSheetInstance | null>(null)
 const filterSaving = ref(false)
-const localHiddenIds = ref<string[]>(readLocalHiddenIds())
+const localHiddenIds = ref<string[]>(readLocalHiddenIds(userStore.userInfo.username))
 
 /** 课表页里本机隐藏的日程（没有 entry_id 的书院课 / 活动 / 预约）在首页同样不显示 */
 const agendaDays = computed<AgendaDay[]>(() => {
@@ -377,7 +377,7 @@ async function reloadFeed() {
 
 /** 两个 tab 的数据一起刷新；多个请求同时失败只提示一次 */
 async function refreshHome() {
-  localHiddenIds.value = readLocalHiddenIds()
+  localHiddenIds.value = readLocalHiddenIds(userStore.userInfo.username)
   const failures = await Promise.all([loadCarousel(), loadAgenda(), loadSettings(), loadFeed()])
   const failure = failures.find(Boolean)
   if (failure) {

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { getBinding } from '@/api/pku'
 import { importPortal } from '@/api/timetable'
 import { RequestError, toRequestError } from '@/http/errors'
+import { useUserStore } from '@/store/user'
 import { clearPkuCredential, readPkuCredential } from '@/utils/timetable'
 
 /**
@@ -30,6 +31,7 @@ export type PortalSyncResult
  * 用记住的密码静默重试一次。不弹任何提示，由页面决定如何呈现。
  */
 export function useTimetableSync() {
+  const userStore = useUserStore()
   const syncing = ref(false)
 
   async function syncPortal(term?: string): Promise<PortalSyncResult> {
@@ -50,7 +52,7 @@ export function useTimetableSync() {
         if (info.statusCode !== 409 || info.code !== 'PKU_LOGIN_REQUIRED')
           return { status: 'error', error: info }
 
-        const credential = readPkuCredential()
+        const credential = readPkuCredential(userStore.userInfo.username)
         if (!credential)
           return { status: 'login_required', error: info, retried: false }
         // 用户在设置里关闭了课表授权：不能用记住的密码绕过它
@@ -70,7 +72,7 @@ export function useTimetableSync() {
           const retryInfo = toRequestError(retryError)
           // 密码错误说明记住的密码已失效：清掉，免得之后每次同步都拿错密码重试
           if (retryInfo.statusCode === 400 && retryInfo.code === 'IAAA_ERROR')
-            clearPkuCredential()
+            clearPkuCredential(userStore.userInfo.username)
           // 记住的密码已失效 / 需要验证码 / 账号被锁：都要用户到导入页处理
           if (retryInfo.statusCode === 400 || retryInfo.statusCode === 409 || retryInfo.statusCode === 429)
             return { status: 'login_required', error: retryInfo, retried: true }
