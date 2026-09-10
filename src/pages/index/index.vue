@@ -161,6 +161,10 @@ onMounted(async () => {
 function onActivityCardClick(id: number) {
   uni.navigateTo({ url: `/pages/activity/detail?id=${id}` })
 }
+
+function goTimetable() {
+  uni.navigateTo({ url: '/pages/timetable/index' })
+}
 </script>
 
 <template>
@@ -183,6 +187,19 @@ function onActivityCardClick(id: number) {
 
   <!-- 活动列表：使用 uv-tabs 切换不同分组 -->
   <view class="px-4 pb-safe">
+    <!-- 课表快捷入口 -->
+    <view
+      class="mt-4 flex items-center justify-between rounded-xl bg-blue-50 px-4 py-3 active:bg-blue-100"
+      @click="goTimetable"
+    >
+      <view class="flex items-center gap-2">
+        <view class="i-carbon-calendar-heat-map text-xl text-blue-600" />
+        <text class="text-sm text-blue-700 font-medium">课表</text>
+        <text class="text-xs text-blue-400">本周课程与活动安排</text>
+      </view>
+      <view class="i-carbon-chevron-right text-sm text-blue-400" />
+    </view>
+
     <view class="mt-4">
       <uv-tabs
         :list="activityTabs"

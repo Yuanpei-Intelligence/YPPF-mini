@@ -131,6 +131,8 @@ usePageRefresh(
 
 // 菜单项
 const menuItems = [
+  { title: '我的课表', icon: 'i-carbon-calendar-heat-map', onClick: () => uni.navigateTo({ url: '/pages/timetable/index' }) },
+  { title: '我的成绩', icon: 'i-carbon-report', onClick: () => uni.navigateTo({ url: '/pages/timetable/grades' }) },
   { title: '我的预约', icon: 'i-carbon-calendar', onClick: () => uni.navigateTo({ url: '/pages/me/my-appointments' }) },
   { title: '信用分记录', icon: 'i-carbon-star', onClick: () => uni.navigateTo({ url: '/pages/me/my-violations' }) },
   // { title: '设置', icon: 'i-carbon-settings', onClick: handleNothing },

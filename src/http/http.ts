@@ -15,6 +15,7 @@ function usesManualErrorPresentation(options: CustomRequestOptions): boolean {
 
 // 刷新 token 状态管理
 let refreshing = false // 防止重复刷新 token 标识
+let bindNavigating = false // 正在跳转绑定页，避免并发 401 重复跳转
 let taskQueue: (() => void)[] = [] // 刷新 token 请求队列
 const NO_RETRY_PATHS = [
   '/pages/login/index',
@@ -35,7 +36,8 @@ export function http<T>(options: CustomRequestOptions) {
       // #endif
       // 响应成功
       success: async (res) => {
-        const responseData = res.data as IResponse<T>
+        // 204 等无响应体时 res.data 可能为空；兜底成空对象，避免解构抛错导致 Promise 永不结束
+        const responseData = (res.data ?? {}) as IResponse<T>
         const { code } = responseData
 
         // 检查是否是401 Authentication Error
@@ -56,9 +58,18 @@ export function http<T>(options: CustomRequestOptions) {
             }
             // 未绑定账号，跳转到绑定页面，防止死锁
             if (loginResult.status === 'unbound') {
-              uni.navigateTo({
-                url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(loginResult.signed_openid)}`,
-              })
+              // 多个请求同时 401 时只跳一次，避免把绑定页叠开好几层
+              if (!bindNavigating) {
+                bindNavigating = true
+                uni.navigateTo({
+                  url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(loginResult.signed_openid)}`,
+                  complete: () => {
+                    setTimeout(() => {
+                      bindNavigating = false
+                    }, 1500)
+                  },
+                })
+              }
               return reject(createResponseError(401, {
                 code: 'auth.binding_required',
                 message: '请先绑定微信账号。',
