@@ -29,15 +29,42 @@ function isApiFieldError(value: unknown): value is ApiFieldError {
     && typeof value.message === 'string'
 }
 
+/**
+ * 单个字段的错误列表。规范格式为 `[{code, message}]`；
+ * 仍按 DRF 原生格式返回的端点给的是 `['msg']` 或 `'msg'`，统一成规范格式（code 记为 `invalid`）。
+ */
+function parseFieldErrorItems(value: unknown): ApiFieldError[] | null {
+  if (typeof value === 'string')
+    return [{ code: 'invalid', message: value }]
+  if (!Array.isArray(value))
+    return null
+
+  const items: ApiFieldError[] = []
+  for (const item of value) {
+    if (isApiFieldError(item))
+      items.push({ code: item.code, message: item.message })
+    else if (typeof item === 'string')
+      items.push({ code: 'invalid', message: item })
+    else
+      return null
+  }
+  return items
+}
+
 function parseFieldErrors(value: unknown): ApiFieldErrors | null {
+  // 没有字段错误的端点可以省略 errors
+  if (value === undefined || value === null)
+    return {}
   if (!isRecord(value))
     return null
 
   const result: ApiFieldErrors = {}
   for (const [field, items] of Object.entries(value)) {
-    if (!Array.isArray(items) || !items.every(isApiFieldError))
-      return null
-    result[field] = items.map(item => ({ code: item.code, message: item.message }))
+    const parsed = parseFieldErrorItems(items)
+    // 形状未知的字段值（如嵌套对象）跳过该字段即可，不要让整个 {code, message} 信封解析失败
+    if (parsed === null)
+      continue
+    result[field] = parsed
   }
   return result
 }
