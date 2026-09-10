@@ -3,7 +3,7 @@ import type { IActivityHomepage, IActivitySummary } from '@/api/types/activity'
 import type { AgendaDay, AgendaOut } from '@/api/types/agenda'
 import type { ICarouselItem } from '@/api/types/carousel'
 import type { Notification } from '@/api/types/notification'
-import type { Occurrence, Settings } from '@/api/types/timetable'
+import type { Occurrence, Settings, SettingsPatch } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import { computed, onMounted, ref } from 'vue'
 import { getActivityOverview } from '@/api/activity'
@@ -14,11 +14,12 @@ import { listNotifications } from '@/api/notification'
 import { getSettings, updateSettings } from '@/api/timetable'
 import { NotificationStatus } from '@/api/types/notification'
 import ActivityCard from '@/components/ActivityCard.vue'
+import AgendaFilterSheet from '@/components/AgendaFilterSheet.vue'
 import AgendaList from '@/components/AgendaList.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
 import { toBackendURL } from '@/utils'
-import { readLocalHiddenIds, suspendsClasses } from '@/utils/timetable'
+import { filterSummary, readLocalHiddenIds, suspendsClasses } from '@/utils/timetable'
 import { openWebview } from '@/utils/webview'
 
 defineOptions({
@@ -36,8 +37,11 @@ definePage({
 
 type HomeTabKey = 'agenda' | 'feed'
 
-/** 日程来源开关，键为课表设置里的字段（timetable/README.md §6.5） */
-type SourceKey = 'show_courses' | 'show_college' | 'show_activities' | 'show_appointments'
+/** 筛选弹层组件暴露的方法 */
+interface FilterSheetInstance {
+  open: () => void
+  close: () => void
+}
 
 interface FeedActivityItem {
   key: string
@@ -59,13 +63,6 @@ type FeedItem = FeedActivityItem | FeedNotificationItem
 const AGENDA_DAYS = 7
 /** 「最新发布」里最多合并的未读通知条数 */
 const FEED_NOTIFICATION_LIMIT = 10
-
-const SOURCE_CHIPS: { key: SourceKey, label: string }[] = [
-  { key: 'show_courses', label: '课表' },
-  { key: 'show_college', label: '书院课' },
-  { key: 'show_activities', label: '活动' },
-  { key: 'show_appointments', label: '预约' },
-]
 
 const homeTabs: { name: string, key: HomeTabKey }[] = [
   { name: '我的日程', key: 'agenda' },
@@ -92,7 +89,8 @@ const agendaLoading = ref(true)
 /** 首屏日程加载失败的页内错误；已有数据时失败只 toast */
 const agendaError = ref('')
 const settings = ref<Settings | null>(null)
-const savingSource = ref<Partial<Record<SourceKey, boolean>>>({})
+const filterSheet = ref<FilterSheetInstance | null>(null)
+const filterSaving = ref(false)
 const localHiddenIds = ref<string[]>(readLocalHiddenIds())
 
 /** 课表页里本机隐藏的日程（没有 entry_id 的书院课 / 活动 / 预约）在首页同样不显示 */
@@ -104,10 +102,11 @@ const agendaDays = computed<AgendaDay[]>(() => {
   }))
 })
 
-/** 尚未升级到 show_courses 的后端不返回该字段，缺失时按开启处理 */
-function sourceEnabled(key: SourceKey): boolean {
-  return settings.value?.[key] ?? true
-}
+/** 「筛选」按钮角标：有来源 / 标签被关闭时显示 已开启/全部 */
+const filterBadge = computed(() => {
+  const summary = filterSummary(settings.value)
+  return summary.allOn ? '' : `${summary.enabled}/${summary.total}`
+})
 
 /** 整个窗口都停课（放假 / 考试周）时用校历原因代替默认文案 */
 const agendaEmptyText = computed(() => {
@@ -125,9 +124,10 @@ const agendaEmptyText = computed(() => {
   return reasons.join(' · ')
 })
 
+/** 尚未升级到 show_courses 的后端不返回该字段，缺失时按开启处理 */
 const agendaEmptyHint = computed(() => (
-  settings.value && !sourceEnabled('show_courses')
-    ? '课表来源已关闭，点上方「课表」可重新显示'
+  settings.value && settings.value.show_courses === false
+    ? '课表来源已关闭，点上方「筛选」可重新显示'
     : '导入课表后，课程会显示在这里'
 ))
 
@@ -168,26 +168,26 @@ async function reloadAgenda() {
     handleApiException(failure)
 }
 
-/** 切换来源开关：先改本地再请求，失败回滚；成功后重拉日程 */
-async function toggleSource(key: SourceKey) {
-  const current = settings.value
-  if (!current || savingSource.value[key])
+function openFilter() {
+  filterSheet.value?.open()
+}
+
+/** 保存筛选（来源开关 + 隐藏的标签），成功后关闭弹层并重拉日程 */
+async function saveFilter(patch: SettingsPatch) {
+  if (filterSaving.value)
     return
-  const previous = current[key] ?? true
-  const next = !previous
-  current[key] = next
-  savingSource.value = { ...savingSource.value, [key]: true }
+  filterSaving.value = true
   try {
-    settings.value = await updateSettings({ [key]: next })
+    settings.value = await updateSettings(patch)
   }
   catch (error) {
-    current[key] = previous
     handleApiException(error)
     return
   }
   finally {
-    savingSource.value = { ...savingSource.value, [key]: false }
+    filterSaving.value = false
   }
+  filterSheet.value?.close()
   await reloadAgenda()
 }
 
@@ -444,24 +444,19 @@ onMounted(async () => {
 
     <!-- 我的日程：今天起 7 天 -->
     <view v-if="currentTabKey === 'agenda'">
-      <view class="mt-3 flex items-center gap-2">
-        <view v-if="settings" class="flex flex-1 flex-wrap items-center gap-1.5">
-          <view
-            v-for="chip in SOURCE_CHIPS"
-            :key="chip.key"
-            class="rounded-full px-2.5 py-1 text-xs transition"
-            :class="[
-              sourceEnabled(chip.key) ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500',
-              { 'opacity-60': savingSource[chip.key] },
-            ]"
-            @click="toggleSource(chip.key)"
-          >
-            {{ chip.label }}
-          </view>
+      <view class="mt-3 flex items-center justify-between gap-2">
+        <view
+          v-if="settings"
+          class="flex items-center gap-1 border border-gray-200 rounded-full bg-white px-2.5 py-1 text-xs text-gray-700 active:bg-gray-50"
+          @click="openFilter"
+        >
+          <text class="i-carbon-filter text-sm text-gray-500" />
+          <text>筛选</text>
+          <text v-if="filterBadge" class="rounded-full bg-blue-600 px-1.5 text-3xs text-white leading-4">{{ filterBadge }}</text>
         </view>
         <view v-else class="flex-1" />
         <view class="flex shrink-0 items-center text-xs text-blue-600 active:opacity-70" @click="goTimetable">
-          <text>本周课表</text>
+          <text>完整课表</text>
           <view class="i-carbon-chevron-right text-sm" />
         </view>
       </view>
@@ -535,6 +530,9 @@ onMounted(async () => {
       </view>
     </view>
   </view>
+
+  <!-- 日程筛选：来源与标签 -->
+  <AgendaFilterSheet ref="filterSheet" :settings="settings" :saving="filterSaving" @save="saveFilter" />
 </template>
 
 <style lang="scss" scoped>

@@ -1,6 +1,8 @@
 import type {
+  CatalogAddIn,
   CatalogEntry,
   CatalogQuery,
+  EditScope,
   EntriesQuery,
   Entry,
   EntryIn,
@@ -47,20 +49,40 @@ export function listEntries(query?: EntriesQuery) {
 }
 
 /**
+ * 单条条目的详情（含课程库信息、调整记录、考试安排）；别人的条目返回 404
+ */
+export function getEntry(id: number) {
+  return http.get<Entry>(`${BASE}/entries/${id}/`, undefined, undefined, manualErrorPresentation)
+}
+
+/**
  * 新建手动条目，成功返回 201
  */
 export function createEntry(payload: EntryIn) {
   return http.post<Entry>(`${BASE}/entries/`, payload, undefined, undefined, manualErrorPresentation)
 }
 
+/** 编辑范围：缺省 all；single / following 必须给 week */
+export interface UpdateEntryOptions {
+  scope?: EditScope
+  week?: number
+}
+
 /**
- * 部分更新条目；`hidden` 对任何来源可改，其它字段仅限手动条目
+ * 部分更新条目。scope / week 随请求体提交：
+ * all（缺省）改条目本身（门户 / 粘贴条目的名称 / 时间 / 地点等改动存为整段调整），
+ * single / following 存为第 week 周 / 第 week 周起的调整，可带 canceled（本次停课）
  */
-export function updateEntry(id: number, payload: EntryPatch) {
+export function updateEntry(id: number, payload: EntryPatch, options: UpdateEntryOptions = {}) {
+  const data: EntryPatch = { ...payload }
+  if (options.scope)
+    data.scope = options.scope
+  if (options.week !== undefined)
+    data.week = options.week
   return http<Entry>({
     url: `${BASE}/entries/${id}/`,
     method: 'PATCH',
-    data: payload,
+    data,
     ...manualErrorPresentation,
   })
 }
@@ -70,6 +92,20 @@ export function updateEntry(id: number, payload: EntryPatch) {
  */
 export function deleteEntry(id: number) {
   return http.delete<void>(`${BASE}/entries/${id}/`, undefined, undefined, manualErrorPresentation)
+}
+
+/**
+ * 撤销一条单次 / 分段调整（恢复该次 / 该段），成功返回 204
+ */
+export function deleteOverride(id: number, overrideId: number) {
+  return http.delete<void>(`${BASE}/entries/${id}/overrides/${overrideId}/`, undefined, undefined, manualErrorPresentation)
+}
+
+/**
+ * 撤销条目的全部调整（恢复默认），成功返回 204
+ */
+export function deleteOverrides(id: number) {
+  return http.delete<void>(`${BASE}/entries/${id}/overrides/`, undefined, undefined, manualErrorPresentation)
 }
 
 /**
@@ -97,7 +133,7 @@ export function getSettings() {
 }
 
 /**
- * 部分更新课表设置（不含 ics_token）
+ * 部分更新课表设置（不含 ics_token；sources / tags 只读）
  */
 export function updateSettings(payload: SettingsPatch) {
   return http<Settings>({
@@ -141,4 +177,12 @@ export function grantSubscribe(payload: SubscribeGrantIn) {
  */
 export function searchCatalog(query: CatalogQuery) {
   return http.get<CatalogEntry[]>(`${BASE}/catalog/`, query, undefined, manualErrorPresentation)
+}
+
+/**
+ * 按课程库行的时间块快速添加（缺省全部时段、旁听），成功返回 201 与新建的条目；
+ * 已在课表中返回 409 `timetable.catalog_already_added`，没有可解析时间块返回 400 `timetable.catalog_no_slots`
+ */
+export function addFromCatalog(id: number, payload: CatalogAddIn = {}) {
+  return http.post<Entry[]>(`${BASE}/catalog/${id}/add/`, payload, undefined, undefined, manualErrorPresentation)
 }

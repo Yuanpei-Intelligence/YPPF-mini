@@ -1,30 +1,29 @@
 <script lang="ts" setup>
 import type { Occurrence, Term, TermsOut, WeekView } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
-import type { DetailAction, DetailActionKey, PaletteColor } from '@/utils/timetable'
+import type { DetailSheetInstance } from '@/hooks/useOccurrenceDetail'
+import type { PaletteColor } from '@/utils/timetable'
 import { onLoad, onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { computed, ref } from 'vue'
-import { getTerms, getWeek, updateEntry } from '@/api/timetable'
+import { getTerms, getWeek } from '@/api/timetable'
+import OccurrenceDetailSheet from '@/components/OccurrenceDetailSheet.vue'
 import { useApiException } from '@/hooks/useApiException'
-import { confirmModal } from '@/utils/dialog'
+import { useOccurrenceDetail } from '@/hooks/useOccurrenceDetail'
 import {
   addDays,
+  AUDIT_BADGE,
   calendarLabelClass,
   chineseDate,
   clockOf,
   colorForOccurrence,
   dayInfoOf,
   daysBetween,
-  describeOccurrenceTime,
   describeSections,
-  detailActionsFor,
+  EXAM_WEEK_LABEL,
+  isExamWeek,
   isIsoDate,
   KIND_BADGES,
-  KIND_LABELS,
   locateDate,
-  readLocalHiddenIds,
-  readShowHidden,
-  saveLocalHiddenIds,
   STATUS_LABELS,
   suspendsClasses,
   todayIso,
@@ -44,11 +43,6 @@ definePage({
 /** 横向滑动切换日期的最小位移（px） */
 const SWIPE_MIN_DISTANCE = 60
 
-interface PopupInstance {
-  open: () => void
-  close: () => void
-}
-
 /** 列表里一行的展示数据 */
 interface DayRow {
   occurrence: Occurrence
@@ -59,6 +53,12 @@ interface DayRow {
   badge: string
   status: string
   hidden: boolean
+  /** 旁听 */
+  audit: boolean
+  tag: string
+  /** 本次被调整过 */
+  modified: boolean
+  exam: boolean
 }
 
 /** 这天要请求的周；inTerm=false 表示这天不在任何学期的教学周内，只是借当前学期兜底 */
@@ -88,13 +88,28 @@ const view = ref<WeekView | null>(null)
 const loadedKey = ref('')
 const loading = ref(false)
 const loadError = ref('')
-const showHidden = ref(readShowHidden())
-const localHiddenIds = ref<string[]>(readLocalHiddenIds())
-const detail = ref<Occurrence | null>(null)
-const detailPopup = ref<PopupInstance | null>(null)
-const hiding = ref(false)
+const detailSheet = ref<DetailSheetInstance | null>(null)
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
+const {
+  detail,
+  entry: detailEntry,
+  entryLoading: detailEntryLoading,
+  entryError: detailEntryError,
+  busy: detailBusy,
+  showHidden,
+  detailHidden,
+  isHidden,
+  reloadLocalPrefs,
+  openDetail,
+  handleDetailAction,
+  handleDetailEdit,
+} = useOccurrenceDetail(detailSheet, {
+  termCode: () => view.value?.term.code,
+  onChanged: () => refresh(),
+  handleApiException,
+  showMessage,
+})
 
 /** 这天落在哪个学期的第几周；不在任何学期内时借当前学期（周次夹到 1..total_weeks） */
 const target = computed<WeekTarget | null>(() => {
@@ -125,6 +140,8 @@ const calendarLabel = computed(() => info.value?.label ?? '')
 const calendarClass = computed(() => calendarLabelClass(info.value?.kind))
 /** 放假 / 考试周：这天没有课 */
 const dayOff = computed(() => suspendsClasses(info.value?.kind))
+/** 考试周（week ≥ exam_week_start），校历没有标签时在副标题里提示 */
+const examWeek = computed(() => inTerm.value && isExamWeek(term.value, target.value?.week))
 
 const headline = computed(() => {
   const parts = [`${chineseDate(date.value)} 周${WEEKDAY_LABELS[weekdayOf(date.value) - 1] ?? ''}`]
@@ -133,7 +150,7 @@ const headline = computed(() => {
   return parts.join(' · ')
 })
 
-/** 标题下方一行：校历标签优先，其次学期名 */
+/** 标题下方一行：校历标签优先，其次考试周，再次学期名 */
 const subline = computed(() => {
   if (calendarLabel.value)
     return { text: calendarLabel.value, cls: calendarClass.value }
@@ -141,14 +158,10 @@ const subline = computed(() => {
     return { text: '暂无可用学期', cls: 'text-gray-400' }
   if (termsOut.value && !inTerm.value)
     return { text: '不在学期教学周内', cls: 'text-gray-400' }
+  if (examWeek.value)
+    return { text: `${EXAM_WEEK_LABEL} · ${term.value?.name ?? ''}`, cls: 'text-amber-600' }
   return { text: term.value?.name ?? '', cls: 'text-gray-400' }
 })
-
-const localHiddenSet = computed(() => new Set(localHiddenIds.value))
-
-function isHidden(occurrence: Occurrence) {
-  return occurrence.hidden || localHiddenSet.value.has(occurrence.id)
-}
 
 const rows = computed<DayRow[]>(() => {
   if (!ready.value || !view.value)
@@ -165,6 +178,10 @@ const rows = computed<DayRow[]>(() => {
       badge: KIND_BADGES[occurrence.kind] ?? '',
       status: STATUS_LABELS[occurrence.status] ?? '',
       hidden: isHidden(occurrence),
+      audit: occurrence.role === 'audit',
+      tag: occurrence.tag ?? '',
+      modified: !!occurrence.modified,
+      exam: occurrence.kind === 'exam',
     }))
 })
 
@@ -259,99 +276,6 @@ function onTouchEnd(event: SwipeEvent) {
   goDay(dx < 0 ? 1 : -1)
 }
 
-const detailColor = computed(() => (detail.value ? colorForOccurrence(detail.value) : null))
-const detailTime = computed(() => (detail.value ? describeOccurrenceTime(detail.value) : ''))
-const detailStatus = computed(() => (detail.value ? STATUS_LABELS[detail.value.status] ?? '' : ''))
-const detailHidden = computed(() => !!detail.value && isHidden(detail.value))
-const detailActions = computed<DetailAction[]>(() =>
-  (detail.value ? detailActionsFor(detail.value, detailHidden.value) : []),
-)
-
-function openDetail(occurrence: Occurrence) {
-  detail.value = occurrence
-  detailPopup.value?.open()
-}
-
-function closeDetail() {
-  detailPopup.value?.close()
-}
-
-async function setHidden(item: Occurrence, hidden: boolean) {
-  if (hiding.value)
-    return
-  if (hidden) {
-    const ok = await confirmModal({
-      title: '隐藏日程',
-      content: '隐藏后它不再显示在课表中；可在「导入与设置」里打开“显示已隐藏的日程”恢复。',
-      confirmText: '隐藏',
-    })
-    if (!ok)
-      return
-  }
-  const entryId = item.ref.entry_id
-  hiding.value = true
-  try {
-    if (typeof entryId === 'number') {
-      // 有存储条目的日程由服务端记录隐藏状态
-      await updateEntry(entryId, { hidden })
-    }
-    else {
-      const next = hidden
-        ? Array.from(new Set([...localHiddenIds.value, item.id]))
-        : localHiddenIds.value.filter(id => id !== item.id)
-      localHiddenIds.value = next
-      saveLocalHiddenIds(next)
-    }
-  }
-  catch (error) {
-    handleApiException(error)
-    return
-  }
-  finally {
-    hiding.value = false
-  }
-  closeDetail()
-  void refresh()
-}
-
-async function handleDetailAction(action: DetailActionKey) {
-  const item = detail.value
-  if (!item)
-    return
-  switch (action) {
-    case 'activity': {
-      const activityId = item.ref.activity_id
-      if (typeof activityId === 'number' && activityId > 0) {
-        closeDetail()
-        uni.navigateTo({ url: `/pages/activity/detail?id=${activityId}` })
-      }
-      else {
-        showMessage('本周活动尚未发布', 'warning')
-      }
-      return
-    }
-    case 'appoint':
-      closeDetail()
-      uni.navigateTo({ url: '/pages/me/my-appointments' })
-      return
-    case 'edit': {
-      const entryId = item.ref.entry_id
-      if (typeof entryId !== 'number' || !view.value) {
-        showMessage('该日程无法编辑', 'warning')
-        return
-      }
-      closeDetail()
-      uni.navigateTo({ url: `/pages/timetable/entry-form?id=${entryId}&term=${encodeURIComponent(view.value.term.code)}` })
-      return
-    }
-    case 'hide':
-      await setHidden(item, true)
-      return
-    case 'unhide':
-      await setHidden(item, false)
-  }
-}
-
 let shownBefore = false
 
 onLoad((options) => {
@@ -364,8 +288,7 @@ onLoad((options) => {
 
 onShow(() => {
   // 导入页可能改了本机隐藏偏好；从其它页（编辑、活动详情）返回时刷新数据
-  showHidden.value = readShowHidden()
-  localHiddenIds.value = readLocalHiddenIds()
+  reloadLocalPrefs()
   if (shownBefore)
     void refresh()
   shownBefore = true
@@ -431,8 +354,8 @@ onPullDownRefresh(async () => {
         <view
           v-for="row in rows"
           :key="row.occurrence.id"
-          class="mb-3 flex overflow-hidden rounded-xl bg-white shadow-sm active:bg-gray-50"
-          :class="{ 'opacity-50': row.hidden }"
+          class="mb-3 flex overflow-hidden rounded-xl shadow-sm active:bg-gray-50"
+          :class="[row.hidden ? 'opacity-50' : '', row.exam ? 'bg-red-50' : 'bg-white']"
           @click="openDetail(row.occurrence)"
         >
           <view class="w-1.5 shrink-0" :style="{ backgroundColor: row.color.fg }" />
@@ -444,10 +367,16 @@ onPullDownRefresh(async () => {
           <view class="min-w-0 flex-1 py-3 pr-3">
             <view class="flex items-start gap-2">
               <text
-                class="min-w-0 flex-1 text-sm text-gray-900 font-medium leading-5"
-                :class="{ 'line-through text-gray-400': row.occurrence.status === 'canceled' }"
+                class="min-w-0 flex-1 text-sm font-medium leading-5"
+                :class="[row.occurrence.status === 'canceled' ? 'line-through text-gray-400' : row.exam ? 'text-red-700' : 'text-gray-900']"
               >
                 {{ row.occurrence.title }}
+              </text>
+              <text
+                v-if="row.audit"
+                class="shrink-0 rounded bg-amber-500 px-1.5 text-3xs text-white leading-5"
+              >
+                {{ AUDIT_BADGE }}
               </text>
               <text
                 v-if="row.badge"
@@ -462,7 +391,9 @@ onPullDownRefresh(async () => {
               <text class="i-carbon-location mr-1 shrink-0 text-sm text-gray-400" />
               <text class="min-w-0 flex-1 truncate">{{ row.occurrence.location }}</text>
             </view>
-            <view v-if="row.status || row.hidden" class="mt-1.5 flex flex-wrap gap-1.5">
+            <view v-if="row.status || row.hidden || row.tag || row.modified" class="mt-1.5 flex flex-wrap gap-1.5">
+              <text v-if="row.tag" class="rounded-full bg-blue-50 px-2 text-3xs text-blue-600 leading-5">{{ row.tag }}</text>
+              <text v-if="row.modified" class="rounded-full bg-amber-50 px-2 text-3xs text-amber-600 leading-5">本次已调整</text>
               <text v-if="row.status" class="rounded-full bg-gray-100 px-2 text-3xs text-gray-600 leading-5">{{ row.status }}</text>
               <text v-if="row.hidden" class="rounded-full bg-gray-100 px-2 text-3xs text-gray-500 leading-5">已隐藏</text>
             </view>
@@ -473,55 +404,17 @@ onPullDownRefresh(async () => {
   </view>
 
   <!-- 日程详情 -->
-  <uv-popup ref="detailPopup" mode="bottom" :round="16" :safe-area-inset-bottom="true">
-    <view v-if="detail" class="px-5 pb-6 pt-5">
-      <view class="flex items-start gap-3">
-        <view
-          class="mt-1 h-10 w-1.5 shrink-0 rounded-full"
-          :style="{ backgroundColor: detailColor?.fg }"
-        />
-        <view class="min-w-0 flex-1">
-          <text class="block text-lg text-gray-900 font-bold leading-6">{{ detail.title }}</text>
-          <text v-if="detail.subtitle" class="mt-1 block text-sm text-gray-500">{{ detail.subtitle }}</text>
-        </view>
-        <view class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
-          {{ KIND_LABELS[detail.kind] }}
-        </view>
-      </view>
-
-      <view class="mt-4 text-sm text-gray-600 space-y-2">
-        <view class="flex items-start gap-2">
-          <text class="i-carbon-time mt-0.5 text-base text-gray-400" />
-          <text class="flex-1">{{ detailTime }}</text>
-        </view>
-        <view v-if="detail.location" class="flex items-start gap-2">
-          <text class="i-carbon-location mt-0.5 text-base text-gray-400" />
-          <text class="flex-1">{{ detail.location }}</text>
-        </view>
-        <view v-if="detailStatus" class="flex items-start gap-2">
-          <text class="i-carbon-information mt-0.5 text-base text-gray-400" />
-          <text class="flex-1">{{ detailStatus }}</text>
-        </view>
-        <view v-if="detailHidden" class="flex items-start gap-2">
-          <text class="i-carbon-view-off mt-0.5 text-base text-gray-400" />
-          <text class="flex-1">已隐藏</text>
-        </view>
-      </view>
-
-      <view class="mt-5 flex gap-3">
-        <button
-          v-for="action in detailActions"
-          :key="action.key"
-          class="flex-1 rounded-lg py-2.5 text-sm font-medium"
-          :class="action.primary ? 'bg-blue-500 text-white' : 'border border-gray-200 bg-white text-gray-700'"
-          :disabled="hiding"
-          @click="handleDetailAction(action.key)"
-        >
-          {{ action.label }}
-        </button>
-      </view>
-    </view>
-  </uv-popup>
+  <OccurrenceDetailSheet
+    ref="detailSheet"
+    :occurrence="detail"
+    :entry="detailEntry"
+    :entry-loading="detailEntryLoading"
+    :entry-error="detailEntryError"
+    :hidden="detailHidden"
+    :busy="detailBusy"
+    @action="handleDetailAction"
+    @edit="handleDetailEdit"
+  />
 </template>
 
 <style lang="scss" scoped>

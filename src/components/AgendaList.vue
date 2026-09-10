@@ -3,6 +3,7 @@ import type { AgendaDay } from '@/api/types/agenda'
 import type { Occurrence } from '@/api/types/timetable'
 import { computed } from 'vue'
 import {
+  AUDIT_BADGE,
   calendarLabelClass,
   clockOf,
   colorForOccurrence,
@@ -41,7 +42,7 @@ interface AgendaRow {
   end: string
   /** 左侧色条，颜色与课表页同一门课一致 */
   barStyle: string
-  /** 书院课 / 活动 / 预约；学校课程与自定义条目不打标 */
+  /** 书院课 / 活动 / 预约 / 考试；学校课程与自定义条目不打标 */
   badge: string
   badgeStyle: string
   status: string
@@ -49,6 +50,10 @@ interface AgendaRow {
   canceled: boolean
   /** 地点 · 副标题 */
   meta: string
+  /** 旁听 */
+  audit: boolean
+  tag: string
+  exam: boolean
 }
 
 interface AgendaGroup {
@@ -112,6 +117,9 @@ function toRow(occurrence: Occurrence): AgendaRow {
     statusClass: STATUS_CLASSES[occurrence.status] ?? 'text-gray-400',
     canceled: occurrence.status === 'canceled',
     meta: [occurrence.location, occurrence.subtitle].filter(Boolean).join(' · '),
+    audit: occurrence.role === 'audit',
+    tag: occurrence.tag ?? '',
+    exam: occurrence.kind === 'exam',
   }
 }
 
@@ -185,10 +193,16 @@ const isEmpty = computed(() => props.days.every(day => day.occurrences.length ==
             <view class="min-w-0 flex-1">
               <view class="flex items-center gap-1.5">
                 <text
-                  class="min-w-0 flex-1 truncate text-sm text-gray-900 font-medium"
-                  :class="{ 'line-through text-gray-400': row.canceled }"
+                  class="min-w-0 flex-1 truncate text-sm font-medium"
+                  :class="[row.canceled ? 'line-through text-gray-400' : row.exam ? 'text-red-700' : 'text-gray-900']"
                 >
                   {{ row.occurrence.title }}
+                </text>
+                <text v-if="row.audit" class="shrink-0 rounded bg-amber-500 px-1 py-0.5 text-3xs text-white">
+                  {{ AUDIT_BADGE }}
+                </text>
+                <text v-if="row.tag" class="max-w-24 shrink-0 truncate rounded bg-gray-100 px-1.5 py-0.5 text-3xs text-gray-600">
+                  {{ row.tag }}
                 </text>
                 <text v-if="row.badge" class="shrink-0 rounded px-1.5 py-0.5 text-3xs" :style="row.badgeStyle">
                   {{ row.badge }}

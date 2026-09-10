@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { Binding } from '@/api/types/pku'
-import type { IcsOut, ImportOut, Settings, Term, TextDryRunOut, TextFormat } from '@/api/types/timetable'
+import type { IcsOut, ImportOut, Settings, SettingsPatch, Term, TextDryRunOut, TextFormat } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import type { SubscribeOutcome } from '@/hooks/useClassReminder'
 import { onLoad } from '@dcloudio/uni-app'
@@ -15,6 +15,7 @@ import {
   rotateIcsUrl,
   updateSettings,
 } from '@/api/timetable'
+import AgendaFilterSheet from '@/components/AgendaFilterSheet.vue'
 import ApiFieldError from '@/components/ApiFieldError.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { useClassReminder } from '@/hooks/useClassReminder'
@@ -23,6 +24,7 @@ import { confirmModal } from '@/utils/dialog'
 import {
   clearPkuCredential,
   describeSlot,
+  filterSummary,
   formatDateTime,
   readPkuCredential,
   readShowHidden,
@@ -38,10 +40,16 @@ definePage({
   },
 })
 
-type ToggleKey = 'show_courses' | 'show_college' | 'show_activities' | 'show_appointments' | 'share_show_name'
+type ToggleKey = 'share_show_name'
 
 interface PickerEvent {
   detail: { value: number | string }
+}
+
+/** 筛选弹层组件暴露的方法 */
+interface FilterSheetInstance {
+  open: () => void
+  close: () => void
 }
 
 const binding = ref<Binding | null>(null)
@@ -96,6 +104,8 @@ const savingKeys = ref<Record<string, boolean>>({})
 const showHidden = ref(readShowHidden())
 const ics = ref<IcsOut | null>(null)
 const icsLoading = ref(false)
+const filterSheet = ref<FilterSheetInstance | null>(null)
+const filterSaving = ref(false)
 
 // 上课提醒
 const REMINDER_MINUTE_OPTIONS = [5, 10, 15, 20, 30, 45, 60]
@@ -103,12 +113,8 @@ const { templateId: reminderTemplateId, ensureTemplateId, rememberEnabled, subsc
 const reminderSaving = ref(false)
 const reminderHint = ref('')
 
-/** 前四个是日程来源开关，周视图、首页日程和日历订阅一并生效 */
+/** 来源 / 标签的显示开关都在筛选弹层里；这里只剩海报开关 */
 const toggles: { key: ToggleKey, label: string, desc: string }[] = [
-  { key: 'show_courses', label: '显示学校课表', desc: '门户导入、粘贴导入和手动添加的课程' },
-  { key: 'show_college', label: '显示书院课', desc: '已选中的书院课程' },
-  { key: 'show_activities', label: '显示活动', desc: '已报名的活动' },
-  { key: 'show_appointments', label: '显示地下室预约', desc: '我的地下室预约' },
   { key: 'share_show_name', label: '海报显示姓名', desc: '分享海报上显示我的名字' },
 ]
 
@@ -143,6 +149,12 @@ const lockedLabel = computed(() => {
 const needsLogin = computed(() => !binding.value?.bound || binding.value.session.alive === false)
 const formVisible = computed(() => showLoginForm.value || needsLogin.value)
 const busy = computed(() => importing.value || syncing.value)
+
+/** 筛选行的摘要：全部显示 / 已开启 N/M */
+const filterText = computed(() => {
+  const summary = filterSummary(settings.value)
+  return summary.allOn ? '全部显示' : `已开启 ${summary.enabled}/${summary.total}`
+})
 
 const reminderMinuteOptions = computed(() => {
   const current = settings.value?.reminder_minutes
@@ -387,6 +399,29 @@ function handleShowHiddenChange(value: boolean) {
   saveShowHidden(value)
 }
 
+function openFilter() {
+  filterSheet.value?.open()
+}
+
+/** 保存筛选（来源开关 + 隐藏的标签） */
+async function saveFilter(patch: SettingsPatch) {
+  if (filterSaving.value)
+    return
+  filterSaving.value = true
+  try {
+    settings.value = await updateSettings(patch)
+  }
+  catch (error) {
+    handleApiException(error)
+    return
+  }
+  finally {
+    filterSaving.value = false
+  }
+  filterSheet.value?.close()
+  showMessage('已保存', 'success')
+}
+
 function describeSubscribeOutcome(outcome: SubscribeOutcome) {
   switch (outcome) {
     case 'accept':
@@ -529,6 +564,10 @@ async function handleRotateIcs() {
 
 function goEntryForm() {
   uni.navigateTo({ url: `/pages/timetable/entry-form?term=${encodeURIComponent(selectedTerm.value)}` })
+}
+
+function goCatalog() {
+  uni.navigateTo({ url: `/pages/timetable/catalog?term=${encodeURIComponent(selectedTerm.value)}` })
 }
 
 onLoad((options) => {
@@ -745,25 +784,62 @@ onLoad((options) => {
         </view>
       </view>
 
-      <!-- 手动添加 -->
-      <view class="flex items-center justify-between rounded-2xl bg-white p-4 shadow-sm active:bg-gray-50" @click="goEntryForm">
-        <view>
-          <text class="block text-base text-gray-900 font-bold">手动添加</text>
-          <text class="mt-1 block text-xs text-gray-400">自习、社团例会等自定义日程</text>
+      <!-- 考试安排 -->
+      <view class="flex items-start gap-3 rounded-2xl bg-white p-4 shadow-sm">
+        <text class="i-carbon-task mt-0.5 shrink-0 text-xl text-red-500" />
+        <view class="min-w-0 flex-1">
+          <text class="block text-base text-gray-900 font-bold">考试安排</text>
+          <text class="mt-1 block text-xs text-gray-400 leading-5">
+            学期考试安排导入后，课表里的课程会按课程号自动匹配出考试（红色显示），无需手动录入；
+            第 17 周起的考试周会在周次上标出。临时或未匹配到的考试可在「添加 → 手动添加」里选类别“考试”。
+          </text>
         </view>
-        <view class="flex items-center text-blue-600">
-          <text class="i-carbon-add text-xl" />
+      </view>
+
+      <!-- 手动添加 / 课程库 -->
+      <view class="overflow-hidden rounded-2xl bg-white shadow-sm">
+        <view class="flex items-center justify-between border-b border-gray-50 p-4 active:bg-gray-50" @click="goCatalog">
+          <view>
+            <text class="block text-base text-gray-900 font-bold">从课程库添加旁听课程</text>
+            <text class="mt-1 block text-xs text-gray-400">搜索本学期课程，一键把上课时间加进课表</text>
+          </view>
+          <view class="flex items-center text-blue-600">
+            <text class="i-carbon-catalog text-xl" />
+          </view>
+        </view>
+        <view class="flex items-center justify-between p-4 active:bg-gray-50" @click="goEntryForm">
+          <view>
+            <text class="block text-base text-gray-900 font-bold">手动添加</text>
+            <text class="mt-1 block text-xs text-gray-400">课程、考试、自习、社团例会等自定义日程</text>
+          </view>
+          <view class="flex items-center text-blue-600">
+            <text class="i-carbon-add text-xl" />
+          </view>
         </view>
       </view>
 
       <!-- 设置 -->
       <view id="settings" class="rounded-2xl bg-white p-4 shadow-sm">
         <text class="text-base text-gray-900 font-bold">课表设置</text>
+        <view
+          v-if="settings"
+          class="flex items-center justify-between border-b border-gray-50 py-3 active:opacity-70"
+          @click="openFilter"
+        >
+          <view>
+            <text class="block text-sm text-gray-700">筛选来源与标签</text>
+            <text class="block text-xs text-gray-400">学校课表 / 书院课 / 活动 / 预约 / 考试，以及按标签显示或隐藏</text>
+          </view>
+          <view class="flex shrink-0 items-center text-sm text-blue-600">
+            <text>{{ filterText }}</text>
+            <text class="i-carbon-chevron-right ml-0.5" />
+          </view>
+        </view>
         <template v-if="settings">
           <view
             v-for="item in toggles"
             :key="item.key"
-            class="flex items-center justify-between border-b border-gray-50 py-3 last:border-none"
+            class="flex items-center justify-between border-b border-gray-50 py-3"
           >
             <view>
               <text class="block text-sm text-gray-700">{{ item.label }}</text>
@@ -833,7 +909,7 @@ onLoad((options) => {
         <view class="mt-2 border-t border-gray-100 pt-3">
           <text class="block text-sm text-gray-700">日历订阅</text>
           <text class="mt-1 block text-xs text-gray-400 leading-5">
-            把订阅链接添加到系统日历（iOS 日历、Outlook、Google 日历等），课表变动会自动更新。订阅内容跟随上面四个来源开关（学校课表 / 书院课 / 活动 / 地下室预约）。链接含私人 token，请勿转发。
+            把订阅链接添加到系统日历（iOS 日历、Outlook、Google 日历等），课表变动会自动更新。订阅内容跟随「筛选来源与标签」里的设置。链接含私人 token，请勿转发。
           </text>
           <view class="mt-3 flex gap-3">
             <button
@@ -855,6 +931,9 @@ onLoad((options) => {
       </view>
     </view>
   </view>
+
+  <!-- 日程筛选：来源与标签 -->
+  <AgendaFilterSheet ref="filterSheet" :settings="settings" :saving="filterSaving" @save="saveFilter" />
 </template>
 
 <style lang="scss" scoped>

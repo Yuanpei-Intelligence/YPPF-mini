@@ -1,34 +1,31 @@
 <script lang="ts" setup>
 import type { Occurrence, WeekView } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
-import type { DetailAction, DetailActionKey, PaletteColor, WeekPickerItem } from '@/utils/timetable'
+import type { DetailSheetInstance } from '@/hooks/useOccurrenceDetail'
+import type { PaletteColor, RowSpan, WeekPickerItem } from '@/utils/timetable'
 import { onLoad, onPullDownRefresh, onShareAppMessage, onShow } from '@dcloudio/uni-app'
 import { computed, ref } from 'vue'
-import { getWeek, listEntries, updateEntry } from '@/api/timetable'
+import { getWeek, listEntries } from '@/api/timetable'
+import OccurrenceDetailSheet from '@/components/OccurrenceDetailSheet.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { useClassReminder } from '@/hooks/useClassReminder'
+import { useOccurrenceDetail } from '@/hooks/useOccurrenceDetail'
 import { useTimetableSync } from '@/hooks/useTimetableSync'
-import { confirmModal } from '@/utils/dialog'
 import {
+  AUDIT_BADGE,
   cacheWeekView,
   CALENDAR_SHADE_CLASS,
   calendarLabelClass,
   colorForOccurrence,
   dayInfo,
-  describeOccurrenceTime,
-  detailActionsFor,
   KIND_BADGES,
-  KIND_LABELS,
   occurrenceRowSpan,
   readCachedWeekView,
-  readLocalHiddenIds,
-  readShowHidden,
-  saveLocalHiddenIds,
   sectionRows,
   shortDate,
-  STATUS_LABELS,
   suspendsClasses,
   WEEKDAY_LABELS,
+  weekHeaderMark,
   weekPickerItems,
   weekSuspendedReason,
 } from '@/utils/timetable'
@@ -56,6 +53,12 @@ interface GridBlock {
   style: string
   badge: string
   badgeStyle: string
+  /** 旁听 */
+  audit: boolean
+  /** 本次被调整过 */
+  modified: boolean
+  /** 标签；格子太矮时不显示 */
+  tag: string
 }
 
 /** 表头一列（周一到周日）的展示数据 */
@@ -77,7 +80,22 @@ interface WeekCell extends WeekPickerItem {
   cellClass: string
   rangeClass: string
   markClass: string
+  dotClass: string
 }
+
+type AddActionKey = 'catalog' | 'manual' | 'import'
+
+interface AddAction {
+  name: string
+  subname: string
+  key: AddActionKey
+}
+
+const ADD_ACTIONS: AddAction[] = [
+  { name: '从课程库添加', subname: '搜索本学期课程，一键加入旁听或已选课程', key: 'catalog' },
+  { name: '手动添加', subname: '课程、考试、自习、社团例会等', key: 'manual' },
+  { name: '导入课表', subname: '门户登录自动导入，或粘贴选课结果', key: 'import' },
+]
 
 const view = ref<WeekView | null>(null)
 const loading = ref(false)
@@ -86,26 +104,37 @@ const loadError = ref('')
 const selected = ref<{ term: string, week: number } | null>(null)
 /** 本学期是否有任何存储条目；null 表示未知 */
 const termHasEntries = ref<boolean | null>(null)
-const showHidden = ref(readShowHidden())
-const localHiddenIds = ref<string[]>(readLocalHiddenIds())
-const detail = ref<Occurrence | null>(null)
-const detailPopup = ref<PopupInstance | null>(null)
+const detailSheet = ref<DetailSheetInstance | null>(null)
 const weekPickerPopup = ref<PopupInstance | null>(null)
-const hiding = ref(false)
+const addSheet = ref<PopupInstance | null>(null)
 const { syncing, syncPortal } = useTimetableSync()
 const { resubscribeSilently } = useClassReminder()
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
+const {
+  detail,
+  entry: detailEntry,
+  entryLoading: detailEntryLoading,
+  entryError: detailEntryError,
+  busy: detailBusy,
+  showHidden,
+  detailHidden,
+  isHidden,
+  reloadLocalPrefs,
+  openDetail,
+  handleDetailAction,
+  handleDetailEdit,
+} = useOccurrenceDetail(detailSheet, {
+  termCode: () => view.value?.term.code,
+  onChanged: () => refresh(),
+  handleApiException,
+  showMessage,
+})
 
 const term = computed(() => view.value?.term ?? null)
 const rows = computed(() => sectionRows(term.value))
 const gridHeight = computed(() => rows.value.length * ROW_HEIGHT)
 const weekDates = computed(() => view.value?.week_dates ?? [])
-const localHiddenSet = computed(() => new Set(localHiddenIds.value))
-
-function isHidden(occurrence: Occurrence) {
-  return occurrence.hidden || localHiddenSet.value.has(occurrence.id)
-}
 
 const visibleOccurrences = computed(() =>
   (view.value?.occurrences ?? []).filter(item => showHidden.value || !isHidden(item)),
@@ -124,15 +153,18 @@ const conflictSlots = computed(() => {
   return slots
 })
 
-function blockStyle(occurrence: Occurrence, color: PaletteColor) {
-  const { top, span } = occurrenceRowSpan(occurrence, rows.value)
+function blockStyle(occurrence: Occurrence, color: PaletteColor, rowSpan: RowSpan) {
+  const { top, span } = rowSpan
   const slot = conflictSlots.value[occurrence.id] ?? { index: 0, count: 1 }
   const column = Math.min(Math.max(occurrence.weekday, 1), 7) - 1
   const width = COLUMN_WIDTH / slot.count
   const left = column * COLUMN_WIDTH + slot.index * width
-  const border = occurrence.kind === 'custom'
-    ? `border: 2rpx dashed ${color.fg}`
-    : `border-left: 4rpx solid ${color.fg}`
+  // 自定义日程虚线框，考试实线红框，其余左侧色条
+  let border = `border-left: 4rpx solid ${color.fg}`
+  if (occurrence.kind === 'custom')
+    border = `border: 2rpx dashed ${color.fg}`
+  else if (occurrence.kind === 'exam')
+    border = `border: 2rpx solid ${color.fg}`
   const parts = [
     `left: ${left.toFixed(3)}%`,
     `width: calc(${width.toFixed(3)}% - 4rpx)`,
@@ -149,11 +181,16 @@ function blockStyle(occurrence: Occurrence, color: PaletteColor) {
 
 const blocks = computed<GridBlock[]>(() => visibleOccurrences.value.map((occurrence) => {
   const color = colorForOccurrence(occurrence)
+  const rowSpan = occurrenceRowSpan(occurrence, rows.value)
   return {
     occurrence,
-    style: blockStyle(occurrence, color),
+    style: blockStyle(occurrence, color, rowSpan),
     badge: KIND_BADGES[occurrence.kind] ?? '',
     badgeStyle: `background-color: ${color.fg}`,
+    audit: occurrence.role === 'audit',
+    modified: !!occurrence.modified,
+    // 只占一节的格子放不下标签
+    tag: rowSpan.span >= 2 ? (occurrence.tag ?? '') : '',
   }
 }))
 
@@ -166,6 +203,8 @@ const weekRangeLabel = computed(() => {
     return ''
   return `${shortDate(dates[0])} – ${shortDate(dates[6])}`
 })
+/** 表头的周次标记：整周停课的校历原因，否则考试周 */
+const weekMark = computed(() => weekHeaderMark(view.value))
 const sourceLegend = computed(() => (view.value?.sources ?? []).map(item => item.label).join(' · '))
 
 const dayColumns = computed<DayColumn[]>(() => WEEKDAY_LABELS.map((weekday, index) => {
@@ -192,7 +231,7 @@ function columnStyle(index: number) {
   return `left: ${(index * COLUMN_WIDTH).toFixed(3)}%; width: ${COLUMN_WIDTH.toFixed(3)}%`
 }
 
-/** 周次选择器：本周蓝底，正在显示的周描边，停课周标红 */
+/** 周次选择器：本周蓝底，正在显示的周描边，停课周标红，考试周标橙 */
 const weekCells = computed<WeekCell[]>(() => {
   const current = view.value?.today.week ?? null
   const shown = view.value?.week ?? null
@@ -204,11 +243,16 @@ const weekCells = computed<WeekCell[]>(() => {
       cellClass = isShown ? 'border-blue-300 bg-blue-600 text-white' : 'border-blue-600 bg-blue-600 text-white'
     else if (isShown)
       cellClass = 'border-blue-500 bg-blue-50 text-blue-700'
+    const examOnly = !item.suspended && item.exam
+    let markClass = examOnly ? 'text-amber-600' : 'text-red-500'
+    if (isCurrent)
+      markClass = examOnly ? 'text-amber-200' : 'text-red-200'
     return {
       ...item,
       cellClass,
       rangeClass: isCurrent ? 'text-blue-100' : 'text-gray-400',
-      markClass: isCurrent ? 'text-red-200' : 'text-red-500',
+      markClass,
+      dotClass: examOnly ? 'bg-amber-500' : 'bg-red-500',
     }
   })
 })
@@ -329,101 +373,30 @@ async function handleSync() {
   handleApiException(outcome.error)
 }
 
-const detailColor = computed(() => (detail.value ? colorForOccurrence(detail.value) : null))
-const detailTime = computed(() => (detail.value ? describeOccurrenceTime(detail.value) : ''))
-const detailStatus = computed(() => (detail.value ? STATUS_LABELS[detail.value.status] ?? '' : ''))
-const detailHidden = computed(() => !!detail.value && isHidden(detail.value))
-const detailActions = computed<DetailAction[]>(() =>
-  (detail.value ? detailActionsFor(detail.value, detailHidden.value) : []),
-)
-
-function openDetail(occurrence: Occurrence) {
-  detail.value = occurrence
-  detailPopup.value?.open()
-}
-
-function closeDetail() {
-  detailPopup.value?.close()
-}
-
-async function setHidden(item: Occurrence, hidden: boolean) {
-  if (hiding.value)
-    return
-  if (hidden) {
-    const ok = await confirmModal({
-      title: '隐藏日程',
-      content: '隐藏后它不再显示在课表中；可在「导入与设置」里打开“显示已隐藏的日程”恢复。',
-      confirmText: '隐藏',
-    })
-    if (!ok)
-      return
-  }
-  const entryId = item.ref.entry_id
-  hiding.value = true
-  try {
-    if (typeof entryId === 'number') {
-      // 有存储条目的日程由服务端记录隐藏状态
-      await updateEntry(entryId, { hidden })
-    }
-    else {
-      const next = hidden
-        ? Array.from(new Set([...localHiddenIds.value, item.id]))
-        : localHiddenIds.value.filter(id => id !== item.id)
-      localHiddenIds.value = next
-      saveLocalHiddenIds(next)
-    }
-  }
-  catch (error) {
-    handleApiException(error)
-    return
-  }
-  finally {
-    hiding.value = false
-  }
-  closeDetail()
-  void refresh()
-}
-
-async function handleDetailAction(action: DetailActionKey) {
-  const item = detail.value
-  if (!item)
-    return
-  switch (action) {
-    case 'activity': {
-      const activityId = item.ref.activity_id
-      if (typeof activityId === 'number' && activityId > 0) {
-        closeDetail()
-        uni.navigateTo({ url: `/pages/activity/detail?id=${activityId}` })
-      }
-      else {
-        showMessage('本周活动尚未发布', 'warning')
-      }
-      return
-    }
-    case 'appoint':
-      closeDetail()
-      uni.navigateTo({ url: '/pages/me/my-appointments' })
-      return
-    case 'edit': {
-      const entryId = item.ref.entry_id
-      if (typeof entryId !== 'number' || !view.value) {
-        showMessage('该日程无法编辑', 'warning')
-        return
-      }
-      closeDetail()
-      uni.navigateTo({ url: `/pages/timetable/entry-form?id=${entryId}&term=${encodeURIComponent(view.value.term.code)}` })
-      return
-    }
-    case 'hide':
-      await setHidden(item, true)
-      return
-    case 'unhide':
-      await setHidden(item, false)
-  }
+function termQuery() {
+  return view.value ? `term=${encodeURIComponent(view.value.term.code)}` : ''
 }
 
 function goImport(section?: 'settings') {
   uni.navigateTo({ url: section ? `/pages/timetable/import?section=${section}` : '/pages/timetable/import' })
+}
+
+function openAddSheet() {
+  addSheet.value?.open()
+}
+
+function onAddSelect(item: AddAction) {
+  const query = termQuery()
+  switch (item.key) {
+    case 'catalog':
+      uni.navigateTo({ url: `/pages/timetable/catalog${query ? `?${query}` : ''}` })
+      return
+    case 'manual':
+      uni.navigateTo({ url: `/pages/timetable/entry-form${query ? `?${query}` : ''}` })
+      return
+    case 'import':
+      goImport()
+  }
 }
 
 function goPoster() {
@@ -449,8 +422,7 @@ onLoad(() => {
 
 onShow(() => {
   // 导入页可能改了本机隐藏偏好；从其它页返回时刷新数据
-  showHidden.value = readShowHidden()
-  localHiddenIds.value = readLocalHiddenIds()
+  reloadLocalPrefs()
   if (shownBefore)
     void refresh()
   shownBefore = true
@@ -477,9 +449,11 @@ onShareAppMessage(() => ({
       <view class="flex items-center justify-between gap-2">
         <view class="min-w-0 flex-1">
           <text class="block truncate text-sm text-gray-800 font-medium">{{ term?.name || '课表' }}</text>
-          <text class="block text-2xs text-gray-400">
-            {{ weekRangeLabel }}<text v-if="loading && view"> · 更新中…</text>
-          </text>
+          <view class="flex items-center gap-1 text-2xs text-gray-400">
+            <text>{{ weekRangeLabel }}</text>
+            <text v-if="weekMark" class="rounded bg-red-50 px-1 text-3xs text-red-500">{{ weekMark }}</text>
+            <text v-if="loading && view">· 更新中…</text>
+          </view>
         </view>
         <view class="flex shrink-0 items-center">
           <view
@@ -597,15 +571,18 @@ onShareAppMessage(() => ({
             :style="block.style"
             @click="openDetail(block.occurrence)"
           >
+            <!-- 被单次 / 分段调整过的日程右上角一个小点 -->
+            <view v-if="block.modified" class="grid-block__dot" />
             <text
               class="grid-block__title block text-2xs font-medium leading-tight"
               :class="{ 'line-through': block.occurrence.status === 'canceled' }"
             >
-              {{ block.occurrence.title }}
+              <text v-if="block.audit" class="grid-block__audit">{{ AUDIT_BADGE }}</text>{{ block.occurrence.title }}
             </text>
             <text v-if="block.occurrence.location" class="mt-0.5 block truncate text-3xs opacity-80">
               {{ block.occurrence.location }}
             </text>
+            <text v-if="block.tag" class="grid-block__tag">{{ block.tag }}</text>
             <text v-if="block.badge" class="grid-block__badge" :style="block.badgeStyle">{{ block.badge }}</text>
           </view>
 
@@ -636,6 +613,10 @@ onShareAppMessage(() => ({
     <!-- 底部操作栏 -->
     <view class="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-100 bg-white pb-safe">
       <view class="flex">
+        <view class="flex flex-1 flex-col items-center py-2 active:bg-gray-50" @click="openAddSheet">
+          <view class="i-carbon-add text-xl text-blue-600" />
+          <text class="mt-0.5 text-xs text-gray-600">添加</text>
+        </view>
         <view class="flex flex-1 flex-col items-center py-2 active:bg-gray-50" @click="goImport()">
           <view class="i-carbon-cloud-download text-xl text-blue-600" />
           <text class="mt-0.5 text-xs text-gray-600">导入</text>
@@ -657,55 +638,27 @@ onShareAppMessage(() => ({
   </view>
 
   <!-- 日程详情 -->
-  <uv-popup ref="detailPopup" mode="bottom" :round="16" :safe-area-inset-bottom="true">
-    <view v-if="detail" class="px-5 pb-6 pt-5">
-      <view class="flex items-start gap-3">
-        <view
-          class="mt-1 h-10 w-1.5 shrink-0 rounded-full"
-          :style="{ backgroundColor: detailColor?.fg }"
-        />
-        <view class="min-w-0 flex-1">
-          <text class="block text-lg text-gray-900 font-bold leading-6">{{ detail.title }}</text>
-          <text v-if="detail.subtitle" class="mt-1 block text-sm text-gray-500">{{ detail.subtitle }}</text>
-        </view>
-        <view class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
-          {{ KIND_LABELS[detail.kind] }}
-        </view>
-      </view>
+  <OccurrenceDetailSheet
+    ref="detailSheet"
+    :occurrence="detail"
+    :entry="detailEntry"
+    :entry-loading="detailEntryLoading"
+    :entry-error="detailEntryError"
+    :hidden="detailHidden"
+    :busy="detailBusy"
+    @action="handleDetailAction"
+    @edit="handleDetailEdit"
+  />
 
-      <view class="mt-4 text-sm text-gray-600 space-y-2">
-        <view class="flex items-start gap-2">
-          <text class="i-carbon-time mt-0.5 text-base text-gray-400" />
-          <text class="flex-1">{{ detailTime }}</text>
-        </view>
-        <view v-if="detail.location" class="flex items-start gap-2">
-          <text class="i-carbon-location mt-0.5 text-base text-gray-400" />
-          <text class="flex-1">{{ detail.location }}</text>
-        </view>
-        <view v-if="detailStatus" class="flex items-start gap-2">
-          <text class="i-carbon-information mt-0.5 text-base text-gray-400" />
-          <text class="flex-1">{{ detailStatus }}</text>
-        </view>
-        <view v-if="detailHidden" class="flex items-start gap-2">
-          <text class="i-carbon-view-off mt-0.5 text-base text-gray-400" />
-          <text class="flex-1">已隐藏</text>
-        </view>
-      </view>
-
-      <view class="mt-5 flex gap-3">
-        <button
-          v-for="action in detailActions"
-          :key="action.key"
-          class="flex-1 rounded-lg py-2.5 text-sm font-medium"
-          :class="action.primary ? 'bg-blue-500 text-white' : 'border border-gray-200 bg-white text-gray-700'"
-          :disabled="hiding"
-          @click="handleDetailAction(action.key)"
-        >
-          {{ action.label }}
-        </button>
-      </view>
-    </view>
-  </uv-popup>
+  <!-- 添加 -->
+  <uv-action-sheet
+    ref="addSheet"
+    title="添加到课表"
+    :actions="ADD_ACTIONS"
+    cancel-text="取消"
+    :round="16"
+    @select="onAddSelect"
+  />
 
   <!-- 周次选择 -->
   <uv-popup ref="weekPickerPopup" mode="bottom" :round="16" :safe-area-inset-bottom="true">
@@ -733,9 +686,9 @@ onShareAppMessage(() => ({
             >
               <text class="block text-sm font-medium">第 {{ cell.week }} 周</text>
               <text class="block text-3xs" :class="cell.rangeClass">{{ cell.range }}</text>
-              <!-- 停课标签行常驻占位，每格高度一致 -->
-              <text class="block min-h-26rpx truncate text-3xs" :class="cell.markClass">{{ cell.suspended }}</text>
-              <view v-if="cell.suspended" class="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-red-500" />
+              <!-- 标记行常驻占位，每格高度一致 -->
+              <text class="block min-h-26rpx truncate text-3xs" :class="cell.markClass">{{ cell.label }}</text>
+              <view v-if="cell.label" class="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full" :class="cell.dotClass" />
             </view>
           </view>
         </view>
@@ -751,7 +704,11 @@ onShareAppMessage(() => ({
         </view>
         <view class="flex items-center gap-1">
           <view class="h-1.5 w-1.5 rounded-full bg-red-500" />
-          <text>放假 / 考试</text>
+          <text>放假 / 停课</text>
+        </view>
+        <view class="flex items-center gap-1">
+          <view class="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          <text>考试周</text>
         </view>
       </view>
     </view>
@@ -773,6 +730,42 @@ onShareAppMessage(() => ({
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   word-break: break-all;
+}
+
+.grid-block__audit {
+  display: inline-block;
+  padding: 0 4rpx;
+  margin-right: 4rpx;
+  font-size: 16rpx;
+  line-height: 22rpx;
+  color: #fff;
+  vertical-align: 2rpx;
+  background: #d97706;
+  border-radius: 4rpx;
+}
+
+.grid-block__dot {
+  position: absolute;
+  top: 6rpx;
+  right: 6rpx;
+  width: 10rpx;
+  height: 10rpx;
+  background: #d97706;
+  border-radius: 50%;
+}
+
+.grid-block__tag {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0 6rpx;
+  margin-top: 4rpx;
+  overflow: hidden;
+  font-size: 16rpx;
+  line-height: 24rpx;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 6rpx;
 }
 
 .grid-block__badge {

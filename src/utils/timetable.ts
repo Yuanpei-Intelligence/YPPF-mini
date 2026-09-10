@@ -1,4 +1,25 @@
-import type { CalendarEvent, CalendarKind, LessonBlock, Occurrence, OccurrenceKind, Term, WeekDay, WeekView } from '@/api/types/timetable'
+import type {
+  CalendarEvent,
+  CalendarKind,
+  CatalogEntry,
+  EditScope,
+  Entry,
+  EntryCategory,
+  EntryExam,
+  EntryOverride,
+  EntryRole,
+  LessonBlock,
+  Occurrence,
+  OccurrenceKind,
+  OccurrenceSource,
+  OverrideFields,
+  Settings,
+  SettingsPatch,
+  SettingsSource,
+  Term,
+  WeekDay,
+  WeekView,
+} from '@/api/types/timetable'
 
 // @unocss-include
 // 上面这行让 UnoCSS 扫描本文件：这里的校历配色表以字符串形式返回 class（.ts 默认不在扫描范围内）。
@@ -15,6 +36,7 @@ export const KIND_LABELS: Record<OccurrenceKind, string> = {
   activity: '活动',
   appoint: '预约',
   custom: '自定义',
+  exam: '考试',
 }
 
 /** 需要在格子上标出的类别（学校课程与自定义条目不打标） */
@@ -22,6 +44,7 @@ export const KIND_BADGES: Partial<Record<OccurrenceKind, string>> = {
   college: '书院课',
   activity: '活动',
   appoint: '预约',
+  exam: '考试',
 }
 
 export const STATUS_LABELS: Record<string, string> = {
@@ -32,10 +55,38 @@ export const STATUS_LABELS: Record<string, string> = {
 
 export const PARITY_LABELS = ['每周', '单周', '双周'] as const
 
+export const ROLE_LABELS: Record<EntryRole, string> = {
+  enrolled: '已选',
+  audit: '旁听',
+}
+
+/** 格子 / 列表里旁听课程的小标 */
+export const AUDIT_BADGE = '旁'
+
+export const CATEGORY_LABELS: Record<EntryCategory, string> = {
+  course: '课程',
+  exam: '考试',
+  other: '其它',
+}
+
+export const SCOPE_LABELS: Record<EditScope, string> = {
+  single: '仅本次',
+  following: '本次及以后',
+  all: '全部',
+}
+
+/** 本系统存储的条目来源（可编辑、可在服务端隐藏） */
+export function isStoredSource(source: OccurrenceSource): boolean {
+  return source === 'portal' || source === 'paste' || source === 'manual'
+}
+
 export interface PaletteColor {
   bg: string
   fg: string
 }
+
+/** 考试日程固定用红色系，不参与哈希取色 */
+export const EXAM_COLOR: PaletteColor = { bg: '#fee2e2', fg: '#b91c1c' }
 
 /** 浅底深字的 12 色盘，按 color_key 哈希取色，保证同一门课在各处颜色一致 */
 export const PALETTE: PaletteColor[] = [
@@ -65,6 +116,8 @@ export function colorFor(key: string): PaletteColor {
 }
 
 export function colorForOccurrence(occurrence: Occurrence): PaletteColor {
+  if (occurrence.kind === 'exam')
+    return EXAM_COLOR
   return colorFor(occurrence.color_key || occurrence.title)
 }
 
@@ -338,6 +391,25 @@ export function weekdayOf(iso: string): number {
   return day === 0 ? 7 : day
 }
 
+/* -------------------- 考试周 -------------------- */
+
+/** 第 week 周是否为考试周（week ≥ exam_week_start）；后端未设置或未升级时一律 false */
+export function isExamWeek(term: Term | null | undefined, week: number | null | undefined): boolean {
+  const start = term?.exam_week_start
+  return typeof start === 'number' && start > 0 && typeof week === 'number' && week >= start
+}
+
+/** 教学周数：后端给的 teaching_weeks，否则由 exam_week_start 推算，再否则为 total_weeks */
+export function teachingWeeksOf(term: Term | null | undefined): number {
+  if (!term)
+    return 16
+  if (typeof term.teaching_weeks === 'number' && term.teaching_weeks > 0)
+    return Math.min(term.teaching_weeks, term.total_weeks)
+  if (typeof term.exam_week_start === 'number' && term.exam_week_start > 1)
+    return Math.min(term.exam_week_start - 1, term.total_weeks)
+  return term.total_weeks
+}
+
 /** 某天在学期里的教学周次；不在 [week1_monday, week1_monday + total_weeks×7) 内为 null */
 export function weekOfDate(term: Term, iso: string): number | null {
   const diff = daysBetween(term.week1_monday, iso)
@@ -405,11 +477,18 @@ export interface WeekPickerItem {
   week: number
   /** `M/D–M/D` */
   range: string
-  /** 本周内的停课事件名（放假 / 考试周），多个用 · 连接；没有则为空串 */
+  /** 本周内的停课事件名（放假 / 停课复习考试），多个用 · 连接；没有则为空串 */
   suspended: string
+  /** 考试周（week ≥ exam_week_start） */
+  exam: boolean
+  /** 格子上的标记：校历停课事件优先，其次“考试周”；没有则为空串 */
+  label: string
 }
 
-/** 周次选择器：学期内每一周的日期范围与停课标记 */
+/** 考试周的标签 */
+export const EXAM_WEEK_LABEL = '考试周'
+
+/** 周次选择器：学期内每一周的日期范围、停课标记与考试周 */
 export function weekPickerItems(term: Term): WeekPickerItem[] {
   const suspendedEvents = (term.calendar ?? []).filter(event => suspendsClasses(event.kind))
   const items: WeekPickerItem[] = []
@@ -418,13 +497,27 @@ export function weekPickerItems(term: Term): WeekPickerItem[] {
     const names = suspendedEvents
       .filter(event => eventOverlaps(event, dates[0], dates[6]))
       .map(event => event.name)
+    const suspended = Array.from(new Set(names)).join(' · ')
+    const exam = isExamWeek(term, week)
     items.push({
       week,
       range: `${shortDate(dates[0])}–${shortDate(dates[6])}`,
-      suspended: Array.from(new Set(names)).join(' · '),
+      suspended,
+      exam,
+      label: suspended || (exam ? EXAM_WEEK_LABEL : ''),
     })
   }
   return items
+}
+
+/**
+ * 周视图表头的周次标记：整周停课时用校历原因（放假 / 停课复习考试），
+ * 否则考试周显示“考试周”；都不是则为空串
+ */
+export function weekHeaderMark(view: WeekView | null | undefined): string {
+  if (!view)
+    return ''
+  return weekSuspendedReason(view) || (isExamWeek(view.term, view.week) ? EXAM_WEEK_LABEL : '')
 }
 
 /* -------------------- 日程详情 -------------------- */
@@ -448,27 +541,202 @@ export function describeOccurrenceTime(item: Occurrence): string {
   return parts.join(' · ')
 }
 
-export type DetailActionKey = 'activity' | 'appoint' | 'edit' | 'hide' | 'unhide'
+export type DetailActionKey = 'activity' | 'appoint' | 'edit' | 'cancel_once' | 'reset' | 'hide' | 'unhide' | 'delete'
 
 export interface DetailAction {
   key: DetailActionKey
   label: string
   primary: boolean
+  /** 红色文字的破坏性操作 */
+  danger?: boolean
 }
 
-/** 详情弹层的操作：书院课 / 活动 → 查看活动，预约 → 查看预约，自定义 → 编辑；任何日程都可隐藏 / 取消隐藏 */
-export function detailActionsFor(item: Occurrence, hidden: boolean): DetailAction[] {
+export interface DetailActionContext {
+  hidden: boolean
+  /** 已加载的条目详情；未加载 / 加载失败时为 null，此时按最保守的集合给操作 */
+  entry?: Entry | null
+}
+
+/** 存储条目（含手动考试）的日程：有 entry_id 且来源是本系统存储的 */
+export function isEditableOccurrence(item: Occurrence): boolean {
+  return typeof item.ref.entry_id === 'number' && isStoredSource(item.source)
+}
+
+/**
+ * 详情弹层的操作：书院课 / 活动 → 查看活动，预约 → 查看预约；
+ * 存储条目 → 编辑、本次停课（考试除外）、恢复默认（有调整时）、删除（手动条目）；任何日程都可隐藏 / 取消隐藏
+ */
+export function detailActionsFor(item: Occurrence, context: DetailActionContext): DetailAction[] {
   const actions: DetailAction[] = []
-  if (item.kind === 'college' || item.kind === 'activity')
+  const entry = context.entry ?? null
+  if (item.kind === 'college' || item.kind === 'activity') {
     actions.push({ key: 'activity', label: '查看活动 / 签到', primary: true })
-  else if (item.kind === 'appoint')
+  }
+  else if (item.kind === 'appoint') {
     actions.push({ key: 'appoint', label: '查看预约', primary: true })
-  else if (item.kind === 'custom')
+  }
+  else if (isEditableOccurrence(item)) {
     actions.push({ key: 'edit', label: '编辑', primary: true })
-  actions.push(hidden
+    if (item.kind !== 'exam')
+      actions.push({ key: 'cancel_once', label: '本次停课', primary: false })
+    if (entry?.overrides?.length)
+      actions.push({ key: 'reset', label: '恢复默认', primary: false })
+  }
+  actions.push(context.hidden
     ? { key: 'unhide', label: '取消隐藏', primary: false }
     : { key: 'hide', label: '隐藏', primary: false })
+  if (entry?.source === 'manual' && isEditableOccurrence(item))
+    actions.push({ key: 'delete', label: '删除', primary: false, danger: true })
   return actions
+}
+
+/* -------------------- 条目详情与调整 -------------------- */
+
+/** 条目是否跨多个周（编辑时才需要选择范围） */
+export function entrySpansWeeks(entry: Entry): boolean {
+  return entry.week_end > entry.week_start
+}
+
+/** 调整在第 week 周是否生效（null 边界为开区间） */
+function overrideCovers(override: EntryOverride, week: number): boolean {
+  return (override.week_start === null || override.week_start <= week)
+    && (override.week_end === null || override.week_end >= week)
+}
+
+/** 调整范围的宽度（null 边界取条目的首尾周） */
+function overrideWidth(override: EntryOverride, entry: Entry): number {
+  const start = override.week_start ?? entry.week_start
+  const end = override.week_end ?? entry.week_end
+  return end - start
+}
+
+export interface EffectiveOverride {
+  fields: OverrideFields
+  canceled: boolean
+  /** 有任何调整命中这一周 */
+  modified: boolean
+}
+
+/**
+ * 第 week 周实际生效的调整：按范围从宽到窄、id 从小到大依次叠加（与后端展开规则一致），
+ * 更窄或更新的调整在每个键上优先，canceled 取最后一个命中的值
+ */
+export function effectiveOverrideAt(entry: Entry, week: number): EffectiveOverride {
+  const applicable = (entry.overrides ?? [])
+    .filter(override => overrideCovers(override, week))
+    .sort((a, b) => overrideWidth(b, entry) - overrideWidth(a, entry) || a.id - b.id)
+  const fields: OverrideFields = {}
+  let canceled = false
+  for (const override of applicable) {
+    Object.assign(fields, override.fields)
+    canceled = override.canceled
+  }
+  return { fields, canceled, modified: applicable.length > 0 }
+}
+
+/** 调整覆盖的周次：`第3周` / `第3周起` / `第3–5周` / `全部周次` */
+export function describeOverrideRange(override: EntryOverride): string {
+  const { week_start: start, week_end: end } = override
+  if (start === null && end === null)
+    return '全部周次'
+  if (start !== null && end === null)
+    return `第${start}周起`
+  if (start === null && end !== null)
+    return `第${end}周及以前`
+  return start === end ? `第${start}周` : `第${start}–${end}周`
+}
+
+/** 考试安排的时间行：`1月11日 周一 · 08:30–10:30`；日期无效时退回原始字符串 */
+export function describeExamTime(exam: EntryExam): string {
+  const date = exam.start.slice(0, 10)
+  const weekday = weekdayOf(date)
+  const day = weekday ? `${chineseDate(date)} 周${WEEKDAY_LABELS[weekday - 1]}` : date
+  return `${day} · ${clockOf(exam.start)}–${clockOf(exam.end)}`
+}
+
+/** 课程号-班号，如 `04831410-01`；都没有时为空串 */
+export function describeCourseCode(item: { course_code: string, class_no: string }): string {
+  return [item.course_code, item.class_no].filter(Boolean).join('-')
+}
+
+/** 学分与院系 / 类别：`2 学分 · 信息科学技术学院 · 专业必修` */
+export function describeCatalogMeta(catalog: { credits: number | null, department?: string, category?: string }): string {
+  const parts: string[] = []
+  if (catalog.credits !== null && catalog.credits !== undefined)
+    parts.push(`${catalog.credits} 学分`)
+  if (catalog.department)
+    parts.push(catalog.department)
+  if (catalog.category)
+    parts.push(catalog.category)
+  return parts.join(' · ')
+}
+
+/** 周次与单双周：`第1–16周 单周` */
+export function describeWeeks(entry: { week_start: number, week_end: number, parity: number }): string {
+  const weeks = entry.week_start === entry.week_end ? `第${entry.week_start}周` : `第${entry.week_start}–${entry.week_end}周`
+  const parity = entry.parity === 1 || entry.parity === 2 ? ` ${PARITY_LABELS[entry.parity]}` : ''
+  return `${weeks}${parity}`
+}
+
+/* -------------------- 筛选（来源与标签） -------------------- */
+
+export interface FilterSourceItem extends SettingsSource {
+  enabled: boolean
+}
+
+export interface FilterTagItem {
+  tag: string
+  enabled: boolean
+}
+
+/** 尚未升级到 sources 列表的后端：按已知的来源开关兜底 */
+const FALLBACK_SOURCES: SettingsSource[] = [
+  { key: 'stored', label: '学校课表', setting: 'show_courses' },
+  { key: 'college', label: '书院课', setting: 'show_college' },
+  { key: 'activity', label: '活动', setting: 'show_activities' },
+  { key: 'appoint', label: '地下室预约', setting: 'show_appointments' },
+  { key: 'exam', label: '考试', setting: 'show_exams' },
+]
+
+/** 筛选弹层里的来源列表：后端给的 sources，否则用已知开关兜底（后端没返回的开关跳过）；缺失的值按开启处理 */
+export function filterSources(settings: Settings): FilterSourceItem[] {
+  const record = settings as unknown as Record<string, unknown>
+  const sources = Array.isArray(settings.sources) && settings.sources.length
+    ? settings.sources
+    : FALLBACK_SOURCES.filter(source => source.setting === 'show_courses' || record[source.setting] !== undefined)
+  return sources.map(source => ({ ...source, enabled: record[source.setting] !== false }))
+}
+
+/** 筛选弹层里的标签列表：我的条目用过的标签，在 hidden_tags 里的为关闭 */
+export function filterTags(settings: Settings): FilterTagItem[] {
+  const hidden = new Set(settings.hidden_tags ?? [])
+  return (settings.tags ?? []).map(tag => ({ tag, enabled: !hidden.has(tag) }))
+}
+
+export interface FilterSummary {
+  enabled: number
+  total: number
+  /** 没有任何来源 / 标签被关闭 */
+  allOn: boolean
+}
+
+/** 「筛选」按钮角标用：已开启 / 全部 的计数 */
+export function filterSummary(settings: Settings | null | undefined): FilterSummary {
+  if (!settings)
+    return { enabled: 0, total: 0, allOn: true }
+  const items = [...filterSources(settings), ...filterTags(settings)]
+  const enabled = items.filter(item => item.enabled).length
+  return { enabled, total: items.length, allOn: enabled === items.length }
+}
+
+/** 把筛选弹层里的选择整理成 `PATCH settings/` 的请求体；后端没返回过 tags 时不提交 hidden_tags */
+export function buildFilterPatch(settings: Settings, sources: FilterSourceItem[], tags: FilterTagItem[]): SettingsPatch {
+  const patch: Record<string, boolean | string[]> = {}
+  for (const source of sources)
+    patch[source.setting] = source.enabled
+  if (Array.isArray(settings.tags))
+    patch.hidden_tags = tags.filter(item => !item.enabled).map(item => item.tag)
+  return patch as SettingsPatch
 }
 
 /* -------------------- 本机存储 -------------------- */
@@ -492,6 +760,7 @@ const WEEK_VIEW_CACHE_KEY = 'timetable_week_view'
 const LOCAL_HIDDEN_KEY = 'timetable_hidden_ids'
 const SHOW_HIDDEN_KEY = 'timetable_show_hidden'
 const REMINDER_CACHE_KEY = 'timetable_reminder'
+const CATALOG_PICK_KEY = 'timetable_catalog_pick'
 
 function readStorage<T>(key: string): T | null {
   try {
@@ -576,4 +845,24 @@ export function readReminderCache(): ReminderCache | null {
 
 export function saveReminderCache(cache: ReminderCache) {
   writeStorage(REMINDER_CACHE_KEY, cache)
+}
+
+/**
+ * 课程库页“手动填写”交给表单页的课程库行：表单页只收到 catalog_id，
+ * 具体字段从这里取（没有按 id 取单行的接口，也不想把整行塞进 URL）
+ */
+export function saveCatalogPick(entry: CatalogEntry) {
+  writeStorage(CATALOG_PICK_KEY, entry)
+}
+
+/** 取出并校验暂存的课程库行；id 不符或没有时为 null */
+export function readCatalogPick(id: number): CatalogEntry | null {
+  const value = readStorage<CatalogEntry>(CATALOG_PICK_KEY)
+  if (!value || value.id !== id || typeof value.name !== 'string')
+    return null
+  return { ...value, slots: Array.isArray(value.slots) ? value.slots : [] }
+}
+
+export function clearCatalogPick() {
+  removeStorage(CATALOG_PICK_KEY)
 }
