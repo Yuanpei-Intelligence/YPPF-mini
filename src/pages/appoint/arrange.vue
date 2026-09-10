@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import type { IArrangeTimeResponse, ITimeSection } from '@/api/types/appoint'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { getArrangeByRoom } from '@/api/appoint'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -12,6 +14,8 @@ definePage({
 const Rid = ref<string>('')
 const loading = ref(false)
 const data = ref<IArrangeTimeResponse>()
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 
 // 选中的日期索引（用于记录选中的是哪一天）
 const selectedDayIndex = ref<number | null>(null)
@@ -121,10 +125,7 @@ function onTimeClick(dayIndex: number, section: ITimeSection) {
       .some(s => !isTimeAvailable(s))
 
     if (hasUnavailable) {
-      uni.showToast({
-        title: '选择范围内有不可用时段',
-        icon: 'none',
-      })
+      showMessage('选择范围内有不可用时段。', 'warning')
       return
     }
 
@@ -136,10 +137,7 @@ function onTimeClick(dayIndex: number, section: ITimeSection) {
       const dayLimit = dayInfo?.weekday ? data.value?.available_hours?.[dayInfo.weekday] : null
       const maxLimit = dayLimit ?? data.value?.max_appoint_time
       if (maxLimit && selectedCount > maxLimit) {
-        uni.showToast({
-          title: `该天最多可预约 ${maxLimit / 2} 小时`,
-          icon: 'none',
-        })
+        showMessage(`该天最多可预约 ${maxLimit / 2} 小时。`, 'warning')
         return
       }
     }
@@ -242,10 +240,7 @@ async function fetchData() {
   }
   catch (error) {
     console.error(error)
-    uni.showToast({
-      icon: 'error',
-      title: '加载信息出错',
-    })
+    handleApiException(error)
   }
   finally {
     loading.value = false
@@ -268,6 +263,7 @@ function openAgreement() {
     left-icon="arrow-left"
     @left-click="goBack"
   />
+  <uv-toast ref="toastRef" />
 
   <!-- 加载状态 -->
   <view v-if="loading" class="flex items-center justify-center py-20">
@@ -376,7 +372,7 @@ function openAgreement() {
     </scroll-view>
 
     <!-- 底部确认按钮 -->
-    <view class="fixed bottom-0 left-0 right-0 bg-white px-4 pt-3 shadow-lg pb-safe">
+    <view class="fixed bottom-0 left-0 right-0 bg-white px-4 pt-3 pb-safe shadow-lg">
       <view class="mb-2 text-center text-sm text-gray-600">
         <text v-if="selectedTimeRange">{{ currentDay?.weekday }} {{ selectedTimeRange }}</text>
         <text v-else class="text-gray-400">请选择预约时段</text>

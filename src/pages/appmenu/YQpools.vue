@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { AllPoolsResponse, Pool, PoolItem } from '@/api/types/YQpools'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { PoolStatus, PoolType } from '@/api/types/YQpools'
 import {
   getAllPools,
@@ -8,6 +9,7 @@ import {
   purchaseLottery,
   purchaseRandom,
 } from '@/api/YQpools'
+import { useApiException } from '@/hooks/useApiException'
 import { toBackendURL } from '@/utils'
 
 definePage({
@@ -16,6 +18,40 @@ definePage({
     navigationBarBackgroundColor: '#2563eb',
     navigationBarTextStyle: 'white',
   },
+})
+
+interface UvModalInstance {
+  open: () => void
+  close: () => void
+}
+
+type PendingPurchase
+  = | { kind: 'exchange', item: PoolItem }
+    | { kind: 'lottery', pool: Pool }
+    | { kind: 'random', pool: Pool }
+
+const toastRef = ref<UvToastInstance | null>(null)
+const confirmationModalRef = ref<UvModalInstance | null>(null)
+const pendingPurchase = ref<PendingPurchase | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
+
+const confirmationTitle = computed(() => {
+  if (pendingPurchase.value?.kind === 'exchange')
+    return '确认兑换'
+  if (pendingPurchase.value?.kind === 'lottery')
+    return '确认参与'
+  return '确认购买'
+})
+
+const confirmationContent = computed(() => {
+  const pending = pendingPurchase.value
+  if (!pending)
+    return ''
+  if (pending.kind === 'exchange')
+    return `确定要兑换 ${pending.item.prize__name || '该奖品'} 吗？`
+  if (pending.kind === 'lottery')
+    return `确定要参与该抽奖吗？将消耗 ${pending.pool.ticket_price || 0} 元气值`
+  return `确定要购买该盲盒吗？将消耗 ${pending.pool.ticket_price || 0} 元气值`
 })
 
 // 帮助内容展开状态
@@ -72,10 +108,7 @@ async function loadData() {
   }
   catch (error) {
     console.error('加载数据失败:', error)
-    uni.showToast({
-      title: '加载失败',
-      icon: 'none',
-    })
+    handleApiException(error)
   }
 }
 
@@ -163,136 +196,83 @@ function getExchangeButtonText(item: PoolItem) {
 }
 
 // 兑换奖品
-async function handleExchange(item: PoolItem) {
+function handleExchange(item: PoolItem) {
   if (!canExchange(item))
     return
 
   // 如果有规格选择，需要先打开详情
-  if (item.exchange_attributes && Object.keys(item.exchange_attributes).length > 0) {
+  if (item.exchange_attributes?.length) {
     // TODO: 打开详情弹窗选择规格
-    uni.showToast({
-      title: '请先选择规格',
-      icon: 'none',
-    })
+    showMessage('请先选择规格', 'warning')
     return
   }
 
-  try {
-    const res = await uni.showModal({
-      title: '确认兑换',
-      content: `确定要兑换 ${item.prize__name} 吗？`,
-    })
-    if (!res.confirm)
-      return
-
-    await purchaseExchange({
-      poolitem_id: item.id,
-    })
-
-    uni.showToast({
-      title: '兑换成功',
-      icon: 'success',
-    })
-
-    // 重新加载数据
-    await loadData()
-  }
-  catch (error: any) {
-    console.error('兑换失败:', error)
-    uni.showToast({
-      title: error.message || '兑换失败',
-      icon: 'none',
-    })
-  }
+  pendingPurchase.value = { kind: 'exchange', item }
+  confirmationModalRef.value?.open()
 }
 
 // 参与抽奖
-async function handleLottery(pool: Pool) {
+function handleLottery(pool: Pool) {
   if (!pool.ticket_price)
     return
   if (pool.ticket_price > YQPointBalance.value) {
-    uni.showToast({
-      title: '元气值不足',
-      icon: 'none',
-    })
+    showMessage('元气值不足', 'warning')
     return
   }
   if (pool.status === PoolStatus.ENDED) {
-    uni.showToast({
-      title: '抽奖已结束',
-      icon: 'none',
-    })
+    showMessage('抽奖已结束', 'warning')
     return
   }
 
-  try {
-    const res = await uni.showModal({
-      title: '确认参与',
-      content: `确定要参与该抽奖吗？将消耗 ${pool.ticket_price} 元气值`,
-    })
-    if (!res.confirm)
-      return
-
-    await purchaseLottery({
-      pool_id: pool.id,
-    })
-
-    uni.showToast({
-      title: '参与成功',
-      icon: 'success',
-    })
-
-    // 重新加载数据
-    await loadData()
-  }
-  catch (error: any) {
-    console.error('参与抽奖失败:', error)
-    uni.showToast({
-      title: error.message || '参与失败',
-      icon: 'none',
-    })
-  }
+  pendingPurchase.value = { kind: 'lottery', pool }
+  confirmationModalRef.value?.open()
 }
 
 // 购买盲盒
-async function handleRandom(pool: Pool) {
+function handleRandom(pool: Pool) {
   if (!pool.ticket_price)
     return
   if (pool.ticket_price > YQPointBalance.value) {
-    uni.showToast({
-      title: '元气值不足',
-      icon: 'none',
-    })
+    showMessage('元气值不足', 'warning')
     return
   }
 
+  pendingPurchase.value = { kind: 'random', pool }
+  confirmationModalRef.value?.open()
+}
+
+function cancelPurchase() {
+  pendingPurchase.value = null
+}
+
+async function confirmPurchase() {
+  const pending = pendingPurchase.value
+  if (!pending)
+    return
+
   try {
-    const res = await uni.showModal({
-      title: '确认购买',
-      content: `确定要购买该盲盒吗？将消耗 ${pool.ticket_price} 元气值`,
-    })
-    if (!res.confirm)
-      return
+    if (pending.kind === 'exchange') {
+      await purchaseExchange({ poolitem_id: pending.item.id })
+      showMessage('兑换成功', 'success')
+    }
+    else if (pending.kind === 'lottery') {
+      await purchaseLottery({ pool_id: pending.pool.id })
+      showMessage('参与成功', 'success')
+    }
+    else {
+      const result = await purchaseRandom({ pool_id: pending.pool.id })
+      // TODO: 显示盲盒开箱动画和结果
+      showMessage(result.message || '购买成功', 'success')
+    }
 
-    const result = await purchaseRandom({
-      pool_id: pool.id,
-    })
-
-    // TODO: 显示盲盒开箱动画和结果
-    uni.showToast({
-      title: result.message || '购买成功',
-      icon: 'success',
-    })
-
-    // 重新加载数据
     await loadData()
   }
-  catch (error: any) {
-    console.error('购买盲盒失败:', error)
-    uni.showToast({
-      title: error.message || '购买失败',
-      icon: 'none',
-    })
+  catch (error) {
+    console.error('商城购买失败:', error)
+    handleApiException(error)
+  }
+  finally {
+    pendingPurchase.value = null
   }
 }
 
@@ -304,6 +284,15 @@ onMounted(() => {
 
 <template>
   <view class="min-h-screen bg-gray-50">
+    <uv-toast ref="toastRef" />
+    <uv-modal
+      ref="confirmationModalRef"
+      :title="confirmationTitle"
+      :content="confirmationContent"
+      show-cancel-button
+      @confirm="confirmPurchase"
+      @cancel="cancelPurchase"
+    />
     <!-- 使用帮助区域 -->
     <view class="mx-4 mt-4">
       <view class="rounded-lg bg-gray-100 p-4">
@@ -386,7 +375,7 @@ onMounted(() => {
                 <text v-else-if="pool.type === PoolType.RANDOM">盲盒</text>
                 <text>奖池</text>
               </text>
-              <text class="text-sm text-gray-800 font-medium">{{ pool.title ?? pool.name ?? '—' }}</text>
+              <text class="text-sm text-gray-800 font-medium">{{ pool.title || '—' }}</text>
             </view>
             <view
               class="flex-shrink-0 active:opacity-70"

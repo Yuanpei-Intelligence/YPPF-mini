@@ -7,8 +7,12 @@ export type HttpMethod = UniApp.RequestOptions['method'] | 'PATCH'
 export type CustomRequestOptions = Omit<UniApp.RequestOptions, 'method'> & {
   method?: HttpMethod
   query?: Record<string, any>
-  /** 出错时是否隐藏错误提示 */
+  /** @deprecated 新代码使用 errorPresentation: 'manual'。 */
   hideErrorToast?: boolean
+  /**
+   * legacy-auto 维持尚未迁移模块的原生提示；manual 由页面使用统一异常展示层处理。
+   */
+  errorPresentation?: 'legacy-auto' | 'manual'
 } & IUniUploadFileOptions // 添加uni.uploadFile参数类型
 
 /** 主要提供给 openapi-ts-request 生成的代码使用 */

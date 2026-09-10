@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import type { IActivityDetail } from '@/api/types/activity'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { checkInActivity, getActivityInfo } from '@/api/activity'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -15,6 +17,12 @@ const loading = ref(true)
 const loadError = ref('')
 const checkIning = ref(false)
 const checkInSuccess = ref(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
+
+function hasValidActivityId() {
+  return Number.isInteger(activityId.value) && activityId.value > 0
+}
 
 // 格式化时间显示
 function formatDateTime(dateTimeStr: string) {
@@ -34,17 +42,18 @@ function formatDateTime(dateTimeStr: string) {
 }
 
 async function fetchActivityInfo() {
-  if (!Number.isInteger(activityId.value) || activityId.value <= 0)
+  if (!hasValidActivityId())
     return
   loading.value = true
   loadError.value = ''
   try {
-    activity.value = await getActivityInfo(activityId.value, true)
+    activity.value = await getActivityInfo(activityId.value)
     checkInSuccess.value = activity.value.participation_status === '已参与'
   }
   catch (error) {
     console.error('获取活动签到信息失败:', error)
-    loadError.value = '暂时无法获取活动信息，请检查网络后重试。'
+    // 首屏加载失败只展示页内可重试的错误，不再叠加 toast
+    loadError.value = handleApiException(error, { showToast: false }).message
   }
   finally {
     loading.value = false
@@ -52,8 +61,8 @@ async function fetchActivityInfo() {
 }
 
 async function handleCheckIn() {
-  if (!Number.isInteger(activityId.value) || activityId.value <= 0) {
-    uni.showToast({ title: '参数错误', icon: 'none' })
+  if (!hasValidActivityId()) {
+    showMessage('活动参数错误。', 'warning')
     return
   }
   // 不允许点着玩
@@ -65,17 +74,14 @@ async function handleCheckIn() {
     checkInSuccess.value = true
     if (activity.value)
       activity.value.participation_status = '已参与'
-    uni.showToast({
-      title: res.message || '签到成功',
-      icon: 'success',
-    })
+    showMessage(res.message || '签到成功。', 'success')
     setTimeout(() => {
       uni.redirectTo({ url: `/pages/activity/detail?id=${activityId.value}` })
     }, 1000)
   }
   catch (error) {
     console.error(error)
-    // 错误信息由 http 包负责显示
+    handleApiException(error)
   }
   finally {
     checkIning.value = false
@@ -98,7 +104,7 @@ onLoad((options) => {
       activityId.value = Number(options.id)
     }
   }
-  if (!Number.isInteger(activityId.value) || activityId.value <= 0) {
+  if (!hasValidActivityId()) {
     activityId.value = -1
     loading.value = false
     loadError.value = '签到码无效，无法获取活动信息。'
@@ -117,6 +123,7 @@ onLoad((options) => {
       left-icon="arrow-left"
       @left-click="goBack"
     />
+    <uv-toast ref="toastRef" />
 
     <!-- 加载状态 -->
     <view v-if="loading" class="flex items-center justify-center py-20">

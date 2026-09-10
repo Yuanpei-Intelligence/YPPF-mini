@@ -5,47 +5,12 @@ import { BIND_PAGE, LOGIN_PAGE_LIST } from '@/router/config'
 import { useTokenStore } from '@/store/token'
 import { isDoubleTokenMode } from '@/utils'
 import { toLoginPage } from '@/utils/toLoginPage'
+import { createNetworkError, createResponseError } from './errors'
 import { ResultEnum } from './tools/enum'
 
-/**
- * 将接口返回的错误 data 整理成可展示的字符串
- * 这是为了兼容DRF ValidationError和朴素API实现方式的格式
- * - 朴素API：若有 msg / message 直接使用；若为数组，用分号拼接
- * - DRF：若为dict且值为数组，如 {"字段名":["error1"]}，
- *        按 "key: value" 展开后用分号拼接
- */
-function formatErrorData(data: any): string {
-  // 默认
-  if (data == null)
-    return '请求错误'
-  // 朴素API
-  if (typeof data.msg === 'string' && data.msg)
-    return data.msg
-  if (typeof data.message === 'string' && data.message)
-    return data.message
-  if (Array.isArray(data)) {
-    const list = data.map(item => (typeof item === 'string' ? item : String(item)))
-    return list.length ? list.join('；') : '请求错误'
-  }
-  // DRF
-  if (typeof data === 'object') {
-    const parts: string[] = []
-    for (const value of Object.values(data)) {
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          const text = typeof item === 'string' ? item : String(item)
-          if (text)
-            parts.push(text)
-        }
-      }
-      else if (value != null && value !== '') {
-        parts.push(String(value))
-      }
-    }
-    return parts.length ? parts.join('；') : '请求错误'
-  }
-  // 其他情况
-  return '请求错误'
+/** 判断错误是否由采用新异常契约的页面自行展示。 */
+function usesManualErrorPresentation(options: CustomRequestOptions): boolean {
+  return options.errorPresentation === 'manual' || options.hideErrorToast === true
 }
 
 // 刷新 token 状态管理
@@ -53,8 +18,8 @@ let refreshing = false // 防止重复刷新 token 标识
 let taskQueue: (() => void)[] = [] // 刷新 token 请求队列
 const NO_RETRY_PATHS = [
   '/pages/login/index',
-  '/auth/wx/bind', // 防止死锁
-  '/auth/wx/login',
+  '/api/v2/auth/wx/bind/', // 匿名绑定端点的 401 是凭据错误，不能触发微信重登
+  '/api/v2/auth/wx/login/',
   ...LOGIN_PAGE_LIST,
 ]
 
@@ -82,13 +47,23 @@ export function http<T>(options: CustomRequestOptions) {
           if (!isDoubleTokenMode) {
             // #ifdef MP-WEIXIN
             console.log('token 过期，尝试重新登录')
-            const res = await tokenStore.wxLogin()
+            let loginResult: Awaited<ReturnType<typeof tokenStore.wxLogin>>
+            try {
+              loginResult = await tokenStore.wxLogin()
+            }
+            catch (error) {
+              return reject(error)
+            }
             // 未绑定账号，跳转到绑定页面，防止死锁
-            if (res.status === 'unbound') {
+            if (loginResult.status === 'unbound') {
               uni.navigateTo({
-                url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(res.signed_openid)}`,
+                url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(loginResult.signed_openid)}`,
               })
-              return reject(res)
+              return reject(createResponseError(401, {
+                code: 'auth.binding_required',
+                message: '请先绑定微信账号。',
+                errors: {},
+              }))
             }
             // 绑定的账号，说明登录了，重新尝试发送请求
             return resolve(http<T>(options))
@@ -174,23 +149,25 @@ export function http<T>(options: CustomRequestOptions) {
         }
 
         // 处理其他错误（401以外的）
-        if (!options.hideErrorToast) {
+        const requestError = createResponseError(res.statusCode, res.data)
+        if (!usesManualErrorPresentation(options)) {
           uni.showToast({
             icon: 'none',
-            title: formatErrorData(res.data),
+            title: requestError.message,
           })
         }
-        reject(res)
+        reject(requestError)
       },
       // 响应失败
       fail(err) {
-        if (!options.hideErrorToast) {
+        const requestError = createNetworkError(err)
+        if (!usesManualErrorPresentation(options)) {
           uni.showToast({
             icon: 'none',
-            title: '网络错误，换个网络试试',
+            title: requestError.message,
           })
         }
-        reject(err)
+        reject(requestError)
       },
     } as UniApp.RequestOptions)
   })

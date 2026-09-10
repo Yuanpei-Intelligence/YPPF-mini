@@ -81,14 +81,14 @@ src/main.ts
 
 - `src/pages/`: main-package pages. File location and `definePage` generate the route.
 - `src/pages-auth/`: authentication subpackage registered in `vite.config.ts`.
-- `src/components/`: reusable business/presentation components.
+- `src/components/`: reusable business/presentation components, including `ApiFieldError.vue` for field-level backend errors.
 - `src/api/types/`: pure wire-contract types.
 - `src/api/*.ts`: typed endpoint wrappers.
 - `src/http/`: transport, URL composition, auth headers, response normalization, retry, and standard error presentation.
 - `src/store/`: persistent cross-page Pinia state.
 - `src/router/`: uni-app navigation interception and login routing.
 - `src/tabbar/`: tabbar configuration, rendering, and active index.
-- `src/hooks/`: reusable composition logic.
+- `src/hooks/`: reusable composition logic, including `useApiException` for page-level error presentation.
 - `src/utils/`: routing, backend URL, webview, upload, and low-level helpers.
 - `src/style/`, `src/uni.scss`, and `uno.config.ts`: global styling and design tokens.
 - `src/static/`: packaged static assets, normally referenced at runtime as `/static/...`.
@@ -171,14 +171,16 @@ The `notification` slice is a useful structural reference, not a correctness tem
 
 All new or touched YPPF mini-program APIs use HTTP status codes for success/failure. Do not return an error with HTTP 200.
 
-Every non-2xx response uses this JSON shape:
+Every non-2xx response uses this JSON shape (backend: `api/exceptions.py`, opted in per view through `StandardizedExceptionHandlerMixin`; frontend parser: `src/http/errors.ts`):
 
 ```json
 {
   "code": "validation_error",
-  "message": "请求参数有误",
+  "message": "请求参数有误。",
   "errors": {
-    "field_name": ["该字段不能为空"]
+    "field_name": [
+      { "code": "required", "message": "该字段不能为空。" }
+    ]
   }
 }
 ```
@@ -187,82 +189,56 @@ Contract rules:
 
 - `code` is a required, stable, machine-readable `snake_case` identifier. The minimum shared set is `validation_error`, `not_authenticated`, `invalid_token`, `permission_denied`, `not_found`, `conflict`, `throttled`, `upstream_unavailable`, and `internal_error`. Domain-specific codes such as `insufficient_points`, `sold_out`, or `limit_reached` are allowed when callers need to branch; one meaning must never have multiple codes.
 - `message` is a required, concise, user-safe message. The current product UI is Chinese, so user-facing backend messages should be concise Chinese even though this document is English.
-- `errors` is required. It is a `Record<string, string[]>` and must be `{}` when there are no details. Use dot paths for nested fields and `non_field_errors` for non-field validation.
-- Do not return mixed alternatives such as `detail`, `msg`, a bare string/list, or an arbitrary field dictionary from new/touched endpoints.
-- Use a shared DRF exception handler and a reusable error serializer so authentication, permission, validation, 404, domain, and unexpected exceptions produce the same shape.
+- `errors` is required. It is a `Record<string, { code: string, message: string }[]>` and must be `{}` when there are no details. Each item carries a stable per-field `code` (for DRF validation this is the DRF error code such as `required` or `invalid`) and a user-safe `message`. Use dot paths for nested fields and `non_field_errors` for non-field validation.
+- Do not return mixed alternatives such as `detail`, `msg`, a bare string/list, plain string arrays under `errors`, or an arbitrary field dictionary from new/touched endpoints. The frontend rejects any non-2xx payload that does not match this shape as `invalid_error_response` with a generic message, so a partially migrated endpoint degrades the user-facing text.
+- Use the shared DRF exception handler (`api_exception_handler` via `StandardizedExceptionHandlerMixin`) and the reusable `APIErrorResponseSerializer` so authentication, permission, validation, 404, domain, and unexpected exceptions produce the same shape. Raise `APIError` (or a semantic subclass) for expected domain failures instead of building ad-hoc error responses.
 - Keep successful response schemas endpoint-specific; do not wrap every success merely to match the error envelope.
 - Use 400 for malformed/validation input, 401 for missing/invalid/expired authentication, 403 for authenticated-but-forbidden actions, 404 for missing or deliberately hidden foreign-owned resources, 409 for state/conflict errors, 429 for throttling, 502/503 for upstream/service unavailability, and 500 for unexpected server failures.
 - Never expose tracebacks, exception class names, SQL, secrets, or raw third-party error bodies. A 500 response always uses a generic safe message.
 - Declare the error serializer/statuses in drf-spectacular for every endpoint and test both the HTTP status and payload shape.
-- During migration, old endpoints may still emit DRF `detail` or field dictionaries. Normalize them at the frontend transport boundary, but refactor any touched backend endpoint to the canonical envelope.
+- During migration, untouched legacy endpoints may still emit DRF `detail` or field dictionaries. The frontend transport does not parse those shapes (they surface as `invalid_error_response`), so refactor any touched backend endpoint to the canonical envelope in the same change and opt its view into the shared handler.
 
 ## Frontend error normalization and presentation
 
-All request failures must reject as one normalized `ApiError` class/shape:
+`src/http/http.ts` rejects every request failure as one normalized `RequestError` (`src/http/errors.ts`):
 
 ```ts
-interface ApiError extends Error {
-  statusCode: number | null
-  code: string
-  fieldErrors: Record<string, string[]>
-  kind: 'http' | 'network' | 'timeout' | 'cancelled' | 'unknown'
-  presented: boolean
+class RequestError extends Error {
+  readonly kind: 'network' | 'authentication' | 'permission' | 'business' | 'server' | 'unknown'
+  readonly code: string // backend `code`, or `network_error` / `invalid_error_response` / `unknown_error`
+  readonly statusCode?: number // undefined for network and unknown failures
+  readonly errors: ApiFieldErrors // Record<string, { code: string, message: string }[]>, `{}` when none
+  readonly original: unknown // raw response or throwable, for sanitized diagnostics only
 }
 ```
 
 Transport rules:
 
-- `src/http/http.ts` owns legacy-payload parsing. Normalize in this order: canonical `{ code, message, errors }`; DRF `detail`/field dictionary/list; legacy `message`/`msg`/`error`/`succeed: false`; then a safe status-based fallback.
-- Network errors use `statusCode: null`, `kind: 'network'`, and `code: 'network_error'`. Timeouts use `kind: 'timeout'` and `code: 'timeout'`. A user cancellation uses `kind: 'cancelled'` and is never presented as an error.
-- Non-success legacy business `code` values must reject. They must not show a toast and then resolve `data`.
-- `hideErrorToast` must suppress the default UI for every failure path, including HTTP errors, legacy business errors, network failures, and timeouts; it never suppresses rejection.
-- API modules return/reject typed values and do not catch errors only to rename or display them.
-- The shared presenter sets `presented = true` after displaying an error. A page `catch` updates local error/inline state and may perform recovery, but it must not display again when `presented` is already true.
-- Preserve only sanitized diagnostics; do not log tokens, request bodies containing personal data, or raw sensitive responses.
-- Parallel requests use `hideErrorToast: true` and aggregate into one inline/page error or one presenter call; `Promise.all` must not produce several simultaneous toasts.
+- `kind` is derived from the HTTP status: 401 is `authentication`, 403 is `permission`, other 4xx are `business`, 5xx are `server`; a `uni.request` failure is `network`; anything else is `unknown`. Feature APIs and pages branch on `RequestError.kind` or `code`, never by parsing a translated message.
+- `parseApiErrorResponse` accepts only the canonical `{ code, message, errors }` payload. Any other non-2xx body becomes `code: 'invalid_error_response'` with the safe generic message. Do not add legacy-payload parsers (`detail`, `msg`, string arrays) to the transport; migrate the backend endpoint instead.
+- Network failures use `code: 'network_error'` and the fixed message `网络连接失败，请检查网络后重试。`. `toRequestError` wraps any non-`RequestError` throwable as `unknown_error`.
+- A 401 from a protected endpoint re-runs `tokenStore.wxLogin()` and replays the request; an `unbound` result navigates to the binding page and rejects with `auth.binding_required`. Paths listed in `NO_RETRY_PATHS` (login page, bind/login endpoints) are never retried.
+- Every endpoint of a module migrated to the standardized contract passes `errorPresentation: 'manual'` through the request options. This turns off the transport's own `uni.showToast` for HTTP and network failures; it never suppresses rejection. `hideErrorToast` is deprecated and remains only so untouched legacy calls keep working.
+- Legacy 2xx responses that carry a non-success business `code` still toast from the transport and resolve `data`. This is legacy behavior: when a task touches such a flow, move the backend endpoint to HTTP status codes and the canonical envelope rather than copying the pattern.
+- API modules return/reject typed values and do not catch errors only to rename or display them. Preserve only sanitized diagnostics; do not log tokens, request bodies containing personal data, or raw sensitive responses.
+
+Presentation is owned by the page or orchestration boundary through `useApiException` (`src/hooks/useApiException.ts`) and uv-ui components:
+
+- The page declares `const toastRef = ref<UvToastInstance | null>(null)`, renders `<uv-toast ref="toastRef" />`, and calls `useApiException(toastRef)`, which returns `handleApiException`, `showMessage`, `fieldErrors`, `hasFieldErrors`, `getFieldMessages`, `setFieldError`, `clearFieldError`, and `clearFieldErrors`.
+- `handleApiException(error, options?)` normalizes the error, stores its `errors` as the page's field errors, shows one `uv-toast` whose type follows `kind` (`warning` for network/authentication/permission, `error` otherwise), and returns the `RequestError`. Pass `{ showToast: false }` when the page renders the failure itself; pass `fallbackMessage` only when the normalized message is unusable for that surface.
+- Use uv-ui `uv-toast`, `uv-alert`, and `uv-modal` for exception summaries, inline banners, and confirmations. `uni.showToast`/`uni.showModal` remain migration-only behavior in untouched legacy modules; do not introduce them into migrated code.
 
 Exactly one error surface is allowed for one failure:
 
-1. **Toast — ordinary action or background-refresh failure.** The centralized request/error helper shows:
-   ```ts
-   uni.showToast({
-     title: error.message,
-     icon: 'none',
-     duration: 2500,
-   })
-   ```
-   Use the backend's safe `message`. If absent, use these fixed fallbacks: `网络连接失败，请稍后重试` for network, `请求超时，请稍后重试` for timeout, `登录已过期，请重新登录` for final 401 failure, `没有权限执行此操作` for 403, `请求的内容不存在` for 404, and `服务暂时不可用，请稍后重试` for 5xx.
+1. **Toast — ordinary action or background-refresh failure.** Call `handleApiException(error)` in the page `catch`. Show the backend `message` as the concise business-error summary; network failures use the normalized network message; server and malformed-response failures use the safe generic message. Do not replace a useful normalized message with a page-specific generic `加载失败` or `提交失败`.
+2. **Modal — blocking failure requiring acknowledgement.** Call `handleApiException(error, { showToast: false })`, then open exactly one `uv-modal` with the normalized message. Do not use a modal for routine list-load, validation, or transient network errors.
+3. **Inline — initial list/detail loads and forms.** An initial page-load failure stores `handleApiException(error, { showToast: false }).message` in page state and renders one retryable error view. A form maps the backend `errors` object by its exact request field path: render `<ApiFieldError :messages="getFieldMessages('<field>')" />` beside the matching control, render `non_field_errors` once near the form, preserve all messages for a field, and call `clearFieldError('<field>')` when that field changes. Do not also show a toast/modal. If old data remains visible during a background refresh, keep the data and use one toast instead.
 
-2. **Modal — blocking failure requiring acknowledgement.** Call the request with `hideErrorToast: true`, then show exactly one modal:
-   ```ts
-   uni.showModal({
-     title: '操作失败',
-     content: error.message,
-     showCancel: false,
-     confirmText: '知道了',
-   })
-   ```
-   Do not use a modal for routine list-load, validation, or transient network errors.
+A `catch` block either handles the error once or rethrows it. Parallel requests aggregate into one inline/page error or one `handleApiException` call; `Promise.all` must not produce several simultaneous toasts. Never display both request-layer and page-layer failure popups.
 
-3. **Inline — initial list/detail loads and forms.** Call the request with `hideErrorToast: true`. An initial page-load failure renders one retryable page error; a 400 form response maps `fieldErrors` beside fields, with `message` as the non-field summary. Do not also show a toast/modal. If old data remains visible during a background refresh, keep the data and use one toast instead.
+Confirmation dialogs are not error dialogs. Destructive, irreversible, or value-consuming actions open a `uv-modal` (`ref` plus `open()`, `show-cancel-button`, a specific `title`/`content`/`confirm-text`, and a destructive `confirm-color` only for destructive actions) and run the action from its `@confirm` handler. Cancellation is not an error and shows no toast.
 
-Confirmation dialogs are not error dialogs. Destructive, irreversible, or value-consuming actions use:
-
-```ts
-uni.showModal({
-  title: '<specific action, e.g. 确认删除>',
-  content: '<specific consequence>',
-  confirmText: '<specific verb, e.g. 删除>',
-  cancelText: '取消',
-  confirmColor: '#dc2626',
-})
-```
-
-Use a destructive color only for destructive actions; non-destructive confirmations use the product primary color. Prefer the Promise/`await` form of `uni.showModal` over nesting async work in a `success` callback. Cancellation is not an error and shows no toast.
-
-Success feedback is owned by the initiating UI layer, never by `src/http` or a reusable store. Use a single `uni.showToast({ icon: 'success', ... })` only when success is not already obvious from navigation/state. Never display both request-layer and page-layer failure popups.
-
-The current transport is legacy: it sometimes resolves 2xx business errors and `hideErrorToast` does not cover every branch. When a task touches request/error behavior, refactor the touched flow to this contract; do not copy the legacy pattern.
+Success feedback is owned by the initiating UI layer, never by `src/http` or a reusable store. Use a single `showMessage(message, 'success')` only when success is not already obvious from navigation/state.
 
 ## Page and routing workflow
 
@@ -347,7 +323,7 @@ Minimum verification:
 - Type/API/store/hook change: targeted ESLint, `pnpm type-check`, full `pnpm lint`, and focused behavior verification.
 - Page/component/style change: the above plus `pnpm build:mp:test` or `pnpm build:mp` and a WeChat DevTools smoke test.
 - Route/login/tabbar/manifest/conditional-compile change: WeChat build plus DevTools checks for navigation, back stack, refresh, direct/share entry, and login state.
-- HTTP/error change: test canonical and legacy errors, network failure, timeout, 400, final 401, 403, 404, 409, 5xx, duplicate-popup prevention, and `hideErrorToast` behavior.
+- HTTP/error change: test canonical and malformed error payloads, network failure, timeout, 400 with field errors, final 401 and the unbound binding redirect, 403, 404, 409, 5xx, duplicate-popup prevention, and `errorPresentation: 'manual'` behavior.
 - Backend API change: targeted backend API tests, schema inspection, and frontend contract checks.
 - Dependency or Vite/UnoCSS change: all static checks, WeChat production build, and lockfile inspection.
 - H5/App builds and smoke tests are not required unless a task explicitly adds them to scope.

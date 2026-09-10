@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { Feedback, FeedbackCreate, FeedbackType, OrganizationInfoResponse, PatchedFeedbackUpdate } from '@/api/types/feedback'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { nextTick, onMounted, watch } from 'vue'
 import {
   createFeedback,
@@ -8,6 +9,8 @@ import {
   getOrganizationInfo,
   partialUpdateFeedback,
 } from '@/api/feedback'
+import ApiFieldError from '@/components/ApiFieldError.vue'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -16,6 +19,10 @@ definePage({
     navigationBarTextStyle: 'white',
   },
 })
+
+interface PickerChangeEvent {
+  detail: { value: string | number }
+}
 
 // 从路由参数获取草稿ID（编辑模式）
 const draftId = ref<string>('')
@@ -33,6 +40,15 @@ const formPublisherPublic = ref(true)
 const formSubmitting = ref(false)
 const formOrgType = ref('')
 const formOrg = ref('')
+const toastRef = ref<UvToastInstance | null>(null)
+const {
+  clearFieldError,
+  clearFieldErrors,
+  getFieldMessages,
+  handleApiException,
+  setFieldError,
+  showMessage,
+} = useApiException(toastRef)
 
 // 反馈类型
 const feedbackTypes = ref<FeedbackType[]>([])
@@ -104,6 +120,7 @@ watch(orgOptions, (options) => {
 
 // 监听反馈类型变化，自动设置接收小组类型和接收小组
 watch(formTypeId, (typeId) => {
+  clearFieldError('type')
   // 允许 id 为 0，只检查是否为 null/undefined/空字符串
   if (typeId === null || typeId === undefined || typeId === '')
     return
@@ -133,6 +150,11 @@ watch(formTypeId, (typeId) => {
   }
 })
 
+watch(formTitle, () => clearFieldError('title'))
+watch(formContent, () => clearFieldError('content'))
+watch(formOrgType, () => clearFieldError('otype'))
+watch(formOrg, () => clearFieldError('org'))
+
 // 加载反馈类型
 async function loadTypes() {
   try {
@@ -147,6 +169,7 @@ async function loadTypes() {
   }
   catch (e) {
     console.error('加载反馈类型失败', e)
+    handleApiException(e)
   }
 }
 
@@ -157,7 +180,7 @@ async function loadOrganizationInfo() {
     // 验证响应数据结构
     if (!res || typeof res !== 'object') {
       console.error('组织信息响应格式错误:', res)
-      uni.showToast({ title: '组织信息格式错误', icon: 'none', duration: 3000 })
+      showMessage('组织信息格式错误，请稍后重试。', 'error')
       return
     }
 
@@ -191,8 +214,9 @@ async function loadOrganizationInfo() {
       }
     }
   }
-  catch (e: any) {
+  catch (e) {
     console.error('加载组织信息失败', e)
+    handleApiException(e)
     // 即使加载失败，也设置一个空对象，避免后续代码报错
     organizationInfo.value = {
       org_types: [],
@@ -263,7 +287,7 @@ async function initFormData() {
     }
     catch (e) {
       console.error('加载草稿失败', e)
-      uni.showToast({ title: '加载草稿失败', icon: 'none' })
+      handleApiException(e)
     }
   }
   else {
@@ -299,34 +323,41 @@ async function initFormData() {
   }
 }
 
-function handleFeedbackTypeChange(e: any) {
-  const index = e.detail.value
+function handleFeedbackTypeChange(e: PickerChangeEvent) {
+  const index = Number(e.detail.value)
   const arr = feedbackTypesArray.value
   if (arr && arr[index] && arr[index].id !== undefined) {
     formTypeId.value = arr[index].id
   }
 }
 
-function handlePublisherPublicChange(e: any) {
-  // uni-app switch 组件的 e.detail.value 是布尔值
-  formPublisherPublic.value = e.detail.value === true || e.detail.value === 'true' || e.detail.value === 1
+function handleOrgTypeChange(e: PickerChangeEvent) {
+  formOrgType.value = orgTypeOptions.value[Number(e.detail.value)]?.value ?? ''
+}
+
+function handleOrgChange(e: PickerChangeEvent) {
+  formOrg.value = orgOptions.value[Number(e.detail.value)]?.value ?? ''
 }
 
 async function submitFeedback(asDraft: boolean) {
+  clearFieldErrors()
   const typeId = formTypeId.value
   const title = formTitle.value.trim()
   const body = formContent.value.trim()
   // 允许 id 为 0，只检查是否为 null/undefined/空字符串
   if (typeId === null || typeId === undefined || typeId === '') {
-    uni.showToast({ title: '请选择反馈类型', icon: 'none' })
+    setFieldError('type', '请选择反馈类型。', 'required')
+    showMessage('请检查表单中的错误。', 'warning')
     return
   }
   if (!asDraft && !body) {
-    uni.showToast({ title: '请填写反馈内容', icon: 'none' })
+    setFieldError('content', '反馈内容不能为空。', 'blank')
+    showMessage('请检查表单中的错误。', 'warning')
     return
   }
-  if (title.length > 25) {
-    uni.showToast({ title: '标题不能超过25字符', icon: 'none' })
+  if (title.length > 30) {
+    setFieldError('title', '标题不能超过30字。', 'max_length')
+    showMessage('请检查表单中的错误。', 'warning')
     return
   }
   // 标题和内容分开传（后端要求）
@@ -338,8 +369,8 @@ async function submitFeedback(asDraft: boolean) {
     // 获取选中的反馈类型对象，确保使用正确的 id
     const selectedType = feedbackTypesArray.value.find(t => t.id === typeId)
     if (!selectedType) {
-      uni.showToast({ title: '请选择有效的反馈类型', icon: 'none' })
-      formSubmitting.value = false
+      setFieldError('type', '请选择有效的反馈类型。', 'does_not_exist')
+      showMessage('请检查表单中的错误。', 'warning')
       return
     }
 
@@ -388,22 +419,17 @@ async function submitFeedback(asDraft: boolean) {
     // 验证后端返回的状态是否正确
     if (asDraft && result.issue_status !== 0) {
       console.error('错误：保存草稿时，后端返回的 issue_status 不是 0，而是', result.issue_status)
-      uni.showToast({
-        title: `草稿保存失败（状态异常：${result.issue_status_display || result.issue_status}）`,
-        icon: 'none',
-        duration: 3000,
-      })
-      formSubmitting.value = false
+      showMessage(
+        `草稿保存失败（状态异常：${result.issue_status_display || result.issue_status}）`,
+        'error',
+      )
       return
     }
     else if (!asDraft && result.issue_status !== 1) {
       console.error('错误：提交反馈时，后端返回的 issue_status 不是 1，而是', result.issue_status)
     }
 
-    uni.showToast({
-      title: asDraft ? '草稿已保存' : '提交成功',
-      icon: 'success',
-    })
+    showMessage(asDraft ? '草稿已保存' : '提交成功', 'success')
 
     // 一键回城，清空页面栈
     setTimeout(() => {
@@ -412,10 +438,7 @@ async function submitFeedback(asDraft: boolean) {
   }
   catch (e) {
     console.error('提交失败', e)
-    uni.showToast({
-      title: '提交失败',
-      icon: 'error',
-    })
+    handleApiException(e)
   }
   finally {
     formSubmitting.value = false
@@ -445,8 +468,16 @@ onMounted(async () => {
 
 <template>
   <view class="feedback-form-page min-h-screen bg-[#f8f9fa] pb-10">
+    <uv-toast ref="toastRef" />
     <scroll-view scroll-y class="feedback-form-scroll" :show-scrollbar="false">
       <view class="feedback-form-body">
+        <uv-alert
+          v-if="getFieldMessages('non_field_errors').length"
+          class="mb-4"
+          type="error"
+          title="提交未通过"
+          :description="getFieldMessages('non_field_errors').join('；')"
+        />
         <!-- 反馈类型 -->
         <view class="form-group mb-4">
           <text class="mb-2 block text-sm text-[#424344] font-medium">反馈类型</text>
@@ -457,11 +488,12 @@ onMounted(async () => {
             class="form-picker"
             @change="handleFeedbackTypeChange"
           >
-            <view class="form-picker-inner">
+            <view class="form-picker-inner" :class="{ 'form-control-error': getFieldMessages('type').length }">
               <text class="form-picker-text ellipsis">{{ feedbackTypesArray.find(t => t.id === formTypeId)?.name ?? '请选择反馈类型' }}</text>
               <text class="i-carbon-chevron-down form-picker-arrow" />
             </view>
           </picker>
+          <ApiFieldError :messages="getFieldMessages('type')" />
         </view>
         <!-- 反馈标题 -->
         <view class="form-group mb-4">
@@ -469,12 +501,16 @@ onMounted(async () => {
           <textarea
             v-model="formTitle"
             class="form-textarea"
-            :class="{ 'form-textarea-disabled': isAppealMode }"
-            placeholder="标题不能超过25字符噢！"
-            :maxlength="25"
+            :class="{
+              'form-textarea-disabled': isAppealMode,
+              'form-control-error': getFieldMessages('title').length,
+            }"
+            placeholder="标题不能超过30字"
+            :maxlength="30"
             :disabled="isAppealMode"
             show-confirm-bar
           />
+          <ApiFieldError :messages="getFieldMessages('title')" />
           <text class="mt-2 block text-xs text-[#424344] font-bold">请文明理性发言，共同营造良好的网络环境！</text>
         </view>
         <!-- 接收小组类型 -->
@@ -485,13 +521,14 @@ onMounted(async () => {
             :range="orgTypeOptions"
             range-key="label"
             class="form-picker"
-            @change="(e: any) => { formOrgType = orgTypeOptions[e.detail.value]?.value ?? '' }"
+            @change="handleOrgTypeChange"
           >
-            <view class="form-picker-inner">
+            <view class="form-picker-inner" :class="{ 'form-control-error': getFieldMessages('otype').length }">
               <text class="form-picker-text ellipsis">{{ formOrgType || '请选择' }}</text>
               <text class="i-carbon-chevron-down form-picker-arrow" />
             </view>
           </picker>
+          <ApiFieldError :messages="getFieldMessages('otype')" />
         </view>
         <!-- 接收小组 -->
         <view class="form-group mb-4">
@@ -501,13 +538,14 @@ onMounted(async () => {
             :range="orgOptions"
             range-key="label"
             class="form-picker"
-            @change="(e: any) => { formOrg = orgOptions[e.detail.value]?.value ?? '' }"
+            @change="handleOrgChange"
           >
-            <view class="form-picker-inner">
+            <view class="form-picker-inner" :class="{ 'form-control-error': getFieldMessages('org').length }">
               <text class="form-picker-text ellipsis">{{ formOrg || '请选择' }}</text>
               <text class="i-carbon-chevron-down form-picker-arrow" />
             </view>
           </picker>
+          <ApiFieldError :messages="getFieldMessages('org')" />
         </view>
         <!-- 反馈内容 -->
         <view class="form-group mb-4">
@@ -515,21 +553,19 @@ onMounted(async () => {
           <textarea
             v-model="formContent"
             class="form-textarea form-textarea-large"
+            :class="{ 'form-control-error': getFieldMessages('content').length }"
             placeholder="请描述您的问题或建议..."
             :maxlength="500"
             show-confirm-bar
           />
+          <ApiFieldError :messages="getFieldMessages('content')" />
           <view class="mt-1 text-right text-xs text-gray-400">
             {{ formContent.length }}/500
           </view>
         </view>
         <!-- 是否公开 -->
         <view class="form-group mb-4 flex items-center">
-          <switch
-            :checked="formPublisherPublic"
-            color="#1b55e2"
-            @change="handlePublisherPublicChange"
-          />
+          <uv-switch v-model="formPublisherPublic" active-color="#1b55e2" />
           <text class="ml-3 text-sm text-[#424344]">公开反馈（展示在公示栏，为后来者提供帮助）</text>
         </view>
         <!-- 按钮：适配屏宽、禁用默认点击高亮防闪屏 -->
@@ -619,6 +655,10 @@ onMounted(async () => {
 .form-textarea-disabled {
   background-color: #f3f4f6;
   color: #6b7280;
+}
+
+.form-control-error {
+  border-color: #f56c6c;
 }
 
 .form-buttons {

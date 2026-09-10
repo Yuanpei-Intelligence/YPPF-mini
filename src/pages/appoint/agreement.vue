@@ -1,5 +1,7 @@
 <script lang="ts" setup>
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { getAgreement, signAgreement } from '@/api/appoint'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -9,36 +11,49 @@ definePage({
 })
 
 const agreementTime = ref<string | null>(null)
+const loading = ref(false)
+const signing = ref(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 const isSigned = computed(() => {
   return agreementTime.value !== null
 })
 
 onLoad(async () => {
-  const res = await getAgreement()
-  agreementTime.value = res.agree_time
-  console.log(agreementTime.value)
+  loading.value = true
+  try {
+    const res = await getAgreement()
+    agreementTime.value = res.agree_time
+  }
+  catch (error) {
+    handleApiException(error)
+  }
+  finally {
+    loading.value = false
+  }
 })
 
 async function _signAgreement() {
+  if (signing.value)
+    return
+  signing.value = true
   try {
-    const res = await signAgreement()
+    await signAgreement()
     agreementTime.value = new Date().toDateString()
-    uni.showToast({
-      title: '签署成功',
-      icon: 'success',
-    })
+    showMessage('签署成功。', 'success')
   }
   catch (error) {
     console.error(error)
-    uni.showToast({
-      title: '签署失败',
-      icon: 'error',
-    })
+    handleApiException(error)
+  }
+  finally {
+    signing.value = false
   }
 }
 </script>
 
 <template>
+  <uv-toast ref="toastRef" />
   <view class="min-h-screen bg-gray-50 pb-10">
     <view class="mb-2 text-center text-xl font-bold">
       35楼地下室使用规范
@@ -122,12 +137,12 @@ async function _signAgreement() {
     以上内容解释权归学院所有。
   </view>
   <view class="p-4">
-    <button v-if="!isSigned" class="rounded-sm bg-blue-500 px-4 py-2 text-white" @click="_signAgreement">
+    <uv-button v-if="!isSigned" type="primary" :loading="signing" :disabled="loading || signing" @click="_signAgreement">
       签署协议
-    </button>
-    <button v-else class="rounded-sm bg-gray-400 px-4 py-2 text-white">
-      已签署: {{ agreementTime }}
-    </button>
+    </uv-button>
+    <uv-button v-else disabled>
+      已签署：{{ agreementTime }}
+    </uv-button>
   </view>
 </template>
 

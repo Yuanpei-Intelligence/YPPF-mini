@@ -1,4 +1,5 @@
 import { getTicket } from '@/api/login'
+import { toRequestError } from '@/http/errors'
 
 export interface OpenWebviewOptions {
   uri: string
@@ -52,9 +53,10 @@ export async function openWebview(options: OpenWebviewOptions): Promise<void> {
   }
   catch (err) {
     console.error(err)
+    const requestError = toRequestError(err)
     uni.showToast({
-      title: '登录失败',
-      icon: 'error',
+      title: requestError.message,
+      icon: 'none',
     })
   }
 }

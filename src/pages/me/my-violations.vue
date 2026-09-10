@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import type { IMyViolationsResponse } from '@/api/types/appoint'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { getMyViolations } from '@/api/appoint'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -11,6 +13,8 @@ definePage({
 
 const violations = ref<IMyViolationsResponse>()
 const loading = ref<boolean>(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException } = useApiException(toastRef)
 
 const credit = computed(() => violations.value?.user_info?.credit || 0)
 const vioList = computed(() => violations.value?.vio_list || [])
@@ -23,10 +27,7 @@ async function fetchData() {
   }
   catch (error) {
     console.error(error)
-    uni.showToast({
-      icon: 'error',
-      title: '加载信息失败',
-    })
+    handleApiException(error)
   }
   finally {
     loading.value = false
@@ -45,6 +46,7 @@ onShow(() => {
 </script>
 
 <template>
+  <uv-toast ref="toastRef" />
   <view class="min-h-screen bg-gray-50 pb-10">
     <!-- 信用分卡片 -->
     <view v-if="violations || loading" class="mx-4 mt-4 overflow-hidden border border-blue-100 rounded-lg bg-white shadow-sm">

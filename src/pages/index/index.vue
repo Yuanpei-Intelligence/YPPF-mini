@@ -1,11 +1,13 @@
 <script lang="ts" setup>
 import type { IActivityHomepage, IActivitySummary } from '@/api/types/activity'
 import type { ICarouselItem } from '@/api/types/carousel'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { onMounted, ref } from 'vue'
 import { getActivityOverview } from '@/api/activity'
 import { getCarouselList } from '@/api/carousel'
 import { everydaySignIn, getUserMe } from '@/api/login'
 import ActivityCard from '@/components/ActivityCard.vue'
+import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
 import { toBackendURL } from '@/utils'
 import { openWebview } from '@/utils/webview'
@@ -24,6 +26,8 @@ definePage({
 })
 
 const notifyRef = ref()
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException } = useApiException(toastRef)
 const carouselList = ref<ICarouselItem[]>([])
 const carouselLoading = ref(true)
 
@@ -103,6 +107,7 @@ const { refresh } = usePageRefresh(
     }
     catch (error) {
       console.error('轮播列表获取失败:', error)
+      handleApiException(error)
     }
     finally {
       carouselLoading.value = false
@@ -115,6 +120,7 @@ const { refresh } = usePageRefresh(
     }
     catch (error) {
       console.error('活动数据获取失败:', error)
+      handleApiException(error)
     }
     finally {
       activityLoading.value = false
@@ -128,7 +134,8 @@ onMounted(async () => {
   try {
     await getUserMe()
   }
-  catch {
+  catch (error) {
+    handleApiException(error, { showToast: false })
     return
   }
 
@@ -145,6 +152,7 @@ onMounted(async () => {
   }
   catch (error) {
     console.error('每日签到失败:', error)
+    handleApiException(error)
   }
 
   await refresh()
@@ -157,6 +165,7 @@ function onActivityCardClick(id: number) {
 
 <template>
   <uv-navbar title="首页" :placeholder="true" left-icon="" />
+  <uv-toast ref="toastRef" />
   <uv-notify ref="notifyRef" />
   <view class="bg-white px-4 pt-safe">
     <uv-swiper

@@ -1,8 +1,10 @@
 <script lang="ts" setup>
 import type { IAccount } from '@/api/types/login'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { storeToRefs } from 'pinia'
 import { onMounted } from 'vue'
 import { getMyAccounts } from '@/api/login'
+import { useApiException } from '@/hooks/useApiException'
 import { useUserStore } from '@/store'
 import { useTokenStore } from '@/store/token'
 import { toBackendURL } from '@/utils'
@@ -20,14 +22,14 @@ const { userInfo } = storeToRefs(userStore)
 const accounts = ref<IAccount[]>([])
 const currentAccountId = ref<string>('')
 const loading = ref(false)
+const switchingUsername = ref<string | null>(null)
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 
 // 加载账户列表
 async function loadAccounts() {
   if (!tokenStore.hasLogin) {
-    uni.showToast({
-      title: '请先登录',
-      icon: 'none',
-    })
+    showMessage('请先登录。', 'warning')
     return
   }
 
@@ -42,10 +44,7 @@ async function loadAccounts() {
   }
   catch (error) {
     console.error('加载账户列表失败:', error)
-    uni.showToast({
-      title: '加载失败，请重试',
-      icon: 'error',
-    })
+    handleApiException(error)
   }
   finally {
     loading.value = false
@@ -55,23 +54,15 @@ async function loadAccounts() {
 // 切换账户
 async function switchAccount(account: IAccount) {
   if (account.username === userInfo.value.username) {
-    uni.showToast({
-      title: '不能切换到当前账户',
-      icon: 'none',
-    })
+    showMessage('不能切换到当前账户。', 'warning')
     return
   }
 
-  uni.showLoading({
-    title: '切换中...',
-  })
+  switchingUsername.value = account.username
 
   try {
     await tokenStore.wxLogin(account.username)
-    uni.showToast({
-      title: '切换成功',
-      icon: 'success',
-    })
+    showMessage('切换成功。', 'success')
     // 切换成功后返回上一页
     setTimeout(() => {
       uni.navigateBack()
@@ -79,13 +70,10 @@ async function switchAccount(account: IAccount) {
   }
   catch (error) {
     console.error('切换账户失败:', error)
-    uni.showToast({
-      title: '切换失败，请重试',
-      icon: 'error',
-    })
+    handleApiException(error)
   }
   finally {
-    uni.hideLoading()
+    switchingUsername.value = null
   }
 }
 
@@ -100,6 +88,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <uv-toast ref="toastRef" />
   <view class="min-h-screen bg-gray-50">
     <!-- 当前账户信息 -->
     <view v-if="tokenStore.hasLogin" class="mx-4 mt-4 overflow-hidden rounded-2xl bg-white shadow-sm">
@@ -155,6 +144,7 @@ onMounted(() => {
             </view>
           </view>
           <view class="i-carbon-chevron-right ml-4 text-sm text-gray-300" />
+          <uv-loading-icon v-if="switchingUsername === account.username" mode="circle" size="18" />
         </view>
       </view>
     </view>

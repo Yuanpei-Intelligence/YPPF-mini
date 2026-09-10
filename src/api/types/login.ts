@@ -51,24 +51,41 @@ export interface IWxBindRes {
 /**
  * 用户信息
  */
+export interface IUserProfile {
+  nickname?: string | null
+  gender?: number | null
+  birthday?: string | null
+  email?: string | null
+  telephone?: string | null
+  biography?: string | null
+  identity?: number | null
+  status?: number | boolean | null
+  stu_class?: string | null
+  stu_major?: string | null
+  stu_grade?: string | null
+  stu_dorm?: string | null
+  inform_share?: boolean | null
+  oname?: string | null
+  introduction?: string | null
+}
+
 export interface IUserInfoRes {
-  id?: number
-  userId: number // keeping for backward compatibility if used elsewhere
-  account_id: string
+  id: number
+  userId?: number // keeping for backward compatibility if used elsewhere
+  account_id?: string
   username: string
-  nickname: string
-  name?: string
-  utype?: string
-  active?: boolean
-  is_staff?: boolean
-  is_person?: boolean
-  is_org?: boolean
+  nickname?: string
+  name: string
+  utype: string
+  active: boolean
+  is_staff: boolean
+  is_person: boolean
+  is_org: boolean
   avatar?: string
-  avatar_url?: string
-  wallpaper_url?: string
-  absolute_url?: string
-  profile?: object
-  [key: string]: any // 允许其他扩展字段
+  avatar_url: string
+  wallpaper_url: string
+  absolute_url: string
+  profile: IUserProfile
 }
 
 // 认证存储数据结构

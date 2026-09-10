@@ -6,10 +6,9 @@
  * 图书馆配置
  */
 export interface LibraryConfig {
-  /** 开放时间 */
-  opening_hours?: string
-  /** 其他配置信息 */
-  [key: string]: any
+  opening_time_start: string
+  opening_time_end: string
+  organization_name: string
 }
 
 /**
@@ -17,51 +16,55 @@ export interface LibraryConfig {
  */
 export interface Book {
   id: number
-  /** 书名 */
-  title: string
-  /** 作者 */
-  author?: string
-  /** 出版社 */
-  publisher?: string
-  /** 身份码 */
-  identity_code?: string
-  /** 是否已归还 */
-  returned?: boolean
-  /** 其他字段 */
-  [key: string]: any
+  title: string | null
+  author: string | null
+  publisher: string | null
+  identity_code: string | null
+  returned: boolean
 }
+
+export type LendRecordType
+  = | 'normal'
+    | 'overtime'
+    | 'approaching'
+    | 'returned'
+    | 'overtime_returned'
 
 /**
  * 借阅记录
  */
 export interface LendRecordList {
   id: number
-  /** 书籍信息 */
-  book: Book | number
-  /** 借阅时间 */
-  lend_time?: string
-  /** 归还时间 */
-  return_time?: string | null
-  /** 是否已归还 */
-  returned?: boolean
-  /** 其他字段 */
-  [key: string]: any
+  book_id__title: string | null
+  lend_time: string
+  due_time: string
+  return_time: string | null
+  status?: number
+  type: LendRecordType
+}
+
+/** 书房活动 */
+export interface LibraryActivity {
+  id: number
+  title: string
+  start: string
+  end: string
+  location: string
+  introduction: string
+  status: string
+  status_display: string
+  URL: string
 }
 
 /**
  * 图书馆欢迎页数据
  */
 export interface LibraryWelcome {
-  /** 活动列表 */
-  activities?: any[]
-  /** 开放时间 */
-  opening_time?: string
-  /** 借阅记录 */
-  borrow_records?: LendRecordList[]
-  /** 推荐书籍 */
-  recommendations?: Book[]
-  /** 其他字段 */
-  [key: string]: any
+  activities: LibraryActivity[]
+  opening_time_start: string
+  opening_time_end: string
+  records_list: LendRecordList[]
+  recommendation: Book[]
 }
 
 /**

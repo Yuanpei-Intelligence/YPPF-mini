@@ -87,7 +87,7 @@ export interface IActivityHomepage {
 
 /**
  * 签到结果响应
- * 如果200就成功，失败就是40x，body是DRF格式的错误信息
+ * 失败统一由 RequestError 表示，并保留标准 API 错误码和字段错误。
  */
 export interface ICheckInRes {
   message: string

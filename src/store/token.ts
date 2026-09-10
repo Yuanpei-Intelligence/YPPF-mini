@@ -12,7 +12,6 @@ import {
   getWxCode,
 } from '@/api/login'
 import { isDoubleTokenRes, isSingleTokenRes } from '@/api/types/login'
-import { BIND_PAGE } from '@/router/config'
 import { isDoubleTokenMode } from '@/utils'
 import { useUserStore } from './user'
 
@@ -172,10 +171,6 @@ export const useTokenStore = defineStore(
         console.log('微信登录-username: ', username)
         const res = await _wxLogin(code, username)
         if (res.status === 'unbound') {
-          // 未绑定账号，跳转到绑定页面
-          uni.navigateTo({
-            url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(res.signed_openid)}`,
-          })
           return res
         }
         // 如果成功，储存token和用户名
@@ -186,10 +181,6 @@ export const useTokenStore = defineStore(
       }
       catch (error) {
         console.error('微信登录失败:', error)
-        uni.showToast({
-          title: '登录失败',
-          icon: 'error',
-        })
         throw error
       }
       finally {
@@ -234,10 +225,7 @@ export const useTokenStore = defineStore(
       }
       catch (error) {
         console.error('解除绑定失败:', error)
-        uni.showToast({
-          title: '解除绑定失败',
-          icon: 'error',
-        })
+        throw error
       }
       finally {
         updateNowTime()

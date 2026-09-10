@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import type { ActivityParticipationStatus, IActivityDetail } from '@/api/types/activity'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { getActivityInfo, signUpActivity, withdrawActivitySignup } from '@/api/activity'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -9,11 +11,19 @@ definePage({
   },
 })
 
+interface UvModalInstance {
+  open: () => void
+  close: () => void
+}
+
 const activityId = ref<number | null>(null)
 const activity = ref<IActivityDetail | null>(null)
 const loading = ref(true)
 const loadError = ref('')
 const actionLoading = ref(false)
+const toastRef = ref<UvToastInstance | null>(null)
+const withdrawModalRef = ref<UvModalInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 
 const participationMeta: Record<ActivityParticipationStatus, { label: string, className: string, description: string }> = {
   申请中: {
@@ -104,36 +114,21 @@ async function fetchActivityInfo() {
   loading.value = true
   loadError.value = ''
   try {
-    activity.value = await getActivityInfo(activityId.value, true)
+    activity.value = await getActivityInfo(activityId.value)
   }
   catch (error) {
     console.error('获取活动详情失败:', error)
-    loadError.value = '暂时无法获取活动信息，请检查网络后重试。'
+    // 首屏加载失败只展示页内可重试的错误，不再叠加 toast
+    loadError.value = handleApiException(error, { showToast: false }).message
   }
   finally {
     loading.value = false
   }
 }
 
-async function handleActivityAction() {
+async function submitActivityAction(withdrawing: boolean) {
   if (activityId.value === null || actionLoading.value)
     return
-
-  const withdrawing = canWithdraw.value
-  if (!withdrawing && !canSignUp.value)
-    return
-
-  if (withdrawing) {
-    const modalResult = await uni.showModal({
-      title: '是否确认取消报名？',
-      content: '',
-      cancelText: '否',
-      confirmText: '是',
-      confirmColor: '#ef4444',
-    })
-    if (!modalResult.confirm)
-      return
-  }
 
   actionLoading.value = true
   try {
@@ -145,18 +140,32 @@ async function handleActivityAction() {
       activity.value.participation_status = result.participation_status
       activity.value.current_participants = result.current_participants
     }
-    uni.showToast({
-      title: result.message,
-      icon: 'success',
-    })
+    showMessage(result.message, 'success')
   }
   catch (error) {
     console.error(withdrawing ? '取消报名失败:' : '报名失败:', error)
-    // 后端的具体错误由请求层统一显示。
+    handleApiException(error)
   }
   finally {
     actionLoading.value = false
   }
+}
+
+function handleActivityAction() {
+  if (activityId.value === null || actionLoading.value)
+    return
+
+  // 取消报名先经 uv-modal 确认，报名直接提交
+  if (canWithdraw.value) {
+    withdrawModalRef.value?.open()
+    return
+  }
+  if (canSignUp.value)
+    void submitActivityAction(false)
+}
+
+function confirmWithdraw() {
+  void submitActivityAction(true)
 }
 
 function goBack() {
@@ -183,6 +192,17 @@ onLoad((options) => {
       :placeholder="true"
       left-icon="arrow-left"
       @left-click="goBack"
+    />
+    <uv-toast ref="toastRef" />
+    <uv-modal
+      ref="withdrawModalRef"
+      title="取消报名"
+      content="是否确认取消本次报名？"
+      show-cancel-button
+      cancel-text="否"
+      confirm-text="是"
+      confirm-color="#ef4444"
+      @confirm="confirmWithdraw"
     />
 
     <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">

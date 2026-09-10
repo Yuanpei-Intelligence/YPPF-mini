@@ -36,6 +36,11 @@ export enum EffectCode {
   NO_EFFECT = 2,
 }
 
+export interface ExchangeAttribute {
+  name: string
+  range: string[]
+}
+
 /**
  * 奖品信息（奖池中的物品）
  */
@@ -66,13 +71,11 @@ export interface PoolItem {
   /** 奖品ID */
   prize__id?: number
   /** 兑换属性（如尺寸、颜色等） */
-  exchange_attributes?: Record<string, any>
+  exchange_attributes?: ExchangeAttribute[]
   /** 概率（盲盒奖池） */
   probability?: number
   /** 我的兑换次数（兑换奖池） */
   my_exchange_time?: number
-  /** 其他字段 */
-  [key: string]: any
 }
 
 /**
@@ -102,10 +105,8 @@ export interface LotteryResults {
  */
 export interface Pool {
   id: number
-  /** 奖池名称（后端字段为 title） */
-  name?: string
-  /** 奖池名称（API 实际返回字段） */
-  title?: string
+  /** 奖池名称 */
+  title: string
   /** 奖池类型 */
   type: PoolType
   /** 开始时间 */
@@ -127,13 +128,11 @@ export interface Pool {
   /** 抽奖结果（已结束的抽奖奖池） */
   results?: LotteryResults
   /** 活动ID（如果有关联活动） */
-  activity_id?: number | null
+  activity?: number | null
   /** 空盒补偿下限（盲盒） */
   empty_YQPoint_compensation_lowerbound?: number
   /** 空盒补偿上限（盲盒） */
   empty_YQPoint_compensation_upperbound?: number
-  /** 其他字段 */
-  [key: string]: any
 }
 
 /**
@@ -187,7 +186,7 @@ export interface RandomPurchaseRequest {
  */
 export interface PurchaseResponse {
   /** 是否成功 */
-  succeed: boolean
+  succeed: true
   /** 响应消息 */
   message: string
 }

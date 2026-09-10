@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import type { IArrangeTimeResponse, IIndexResponse, IRoom, ITimeSection } from '@/api/types/appoint'
+import type { UvToastInstance } from '@/hooks/useApiException'
 import { getArrangeByRoom, getIndexStatus } from '@/api/appoint'
+import { useApiException } from '@/hooks/useApiException'
 
 definePage({
   style: {
@@ -12,16 +14,18 @@ definePage({
 const loading = ref(false)
 const roomsData = ref<IIndexResponse>()
 const roomsArrangementData = ref<Map<string, IArrangeTimeResponse>>(new Map())
+const toastRef = ref<UvToastInstance | null>(null)
+const { handleApiException, showMessage } = useApiException(toastRef)
 
 // 生成接下来一周的日期列表
 const weekDays = computed(() => {
-  const days: Array<{ weekday: string; date: string; year: number; month: number; day: number; timestamp: number }> = []
+  const days: Array<{ weekday: string, date: string, year: number, month: number, day: number, timestamp: number }> = []
   const today = new Date()
-  
+
   for (let i = 0; i < 7; i++) {
     const date = new Date(today)
     date.setDate(today.getDate() + i)
-    
+
     const weekdayMap: Record<number, string> = {
       0: 'Sun',
       1: 'Mon',
@@ -31,7 +35,7 @@ const weekDays = computed(() => {
       5: 'Fri',
       6: 'Sat',
     }
-    
+
     days.push({
       weekday: weekdayMap[date.getDay()],
       date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
@@ -41,7 +45,7 @@ const weekDays = computed(() => {
       timestamp: date.getTime(),
     })
   }
-  
+
   return days
 })
 
@@ -71,26 +75,27 @@ const allRooms = computed(() => {
 // 获取当前选中日期对应的所有时间段ID（合并所有房间的时间段）
 const allTimeSectionIds = computed(() => {
   const timeIdSet = new Set<number>()
-  
+
   // 遍历所有房间，收集时间段ID
   allRooms.value.forEach((room) => {
     const arrangement = roomsArrangementData.value.get(room.Rid)
-    if (!arrangement?.dayrange_list) return
-    
+    if (!arrangement?.dayrange_list)
+      return
+
     // 找到当前选中日期对应的数据
     const dayData = arrangement.dayrange_list.find(
       day => day.year === currentDay.value.year
         && day.month === currentDay.value.month
         && day.day === currentDay.value.day,
     )
-    
+
     if (dayData?.timesection) {
       dayData.timesection.forEach((section) => {
         timeIdSet.add(section.id)
       })
     }
   })
-  
+
   // 按 id 排序
   return Array.from(timeIdSet).sort((a, b) => a - b)
 })
@@ -98,16 +103,18 @@ const allTimeSectionIds = computed(() => {
 // 获取某个房间在某个时间段的详细信息
 function getRoomTimeSection(roomId: string, timeId: number): ITimeSection | null {
   const arrangement = roomsArrangementData.value.get(roomId)
-  if (!arrangement?.dayrange_list) return null
-  
+  if (!arrangement?.dayrange_list)
+    return null
+
   const dayData = arrangement.dayrange_list.find(
     day => day.year === currentDay.value.year
       && day.month === currentDay.value.month
       && day.day === currentDay.value.day,
   )
-  
-  if (!dayData?.timesection) return null
-  
+
+  if (!dayData?.timesection)
+    return null
+
   return dayData.timesection.find(s => s.id === timeId) || null
 }
 
@@ -121,37 +128,44 @@ const selectedEndId = ref<number | null>(null)
 // 判断时间段是否可选（status === 0 表示可用）
 function isTimeAvailable(roomId: string, section: ITimeSection): boolean {
   const arrangement = roomsArrangementData.value.get(roomId)
-  if (!arrangement?.dayrange_list) return false
-  
+  if (!arrangement?.dayrange_list)
+    return false
+
   const dayData = arrangement.dayrange_list.find(
     day => day.year === currentDay.value.year
       && day.month === currentDay.value.month
       && day.day === currentDay.value.day,
   )
-  
-  if (!dayData?.timesection) return false
-  
+
+  if (!dayData?.timesection)
+    return false
+
   const sectionData = dayData.timesection.find(s => s.id === section.id)
   return sectionData?.status === 0
 }
 
 // 判断时间段是否被选中
 function isTimeSelected(roomId: string, section: ITimeSection): boolean {
-  if (selectedRoomId.value !== roomId) return false
-  if (selectedStartId.value === null) return false
-  if (selectedEndId.value === null) return section.id === selectedStartId.value
+  if (selectedRoomId.value !== roomId)
+    return false
+  if (selectedStartId.value === null)
+    return false
+  if (selectedEndId.value === null)
+    return section.id === selectedStartId.value
 
   const arrangement = roomsArrangementData.value.get(roomId)
-  if (!arrangement?.dayrange_list) return false
-  
+  if (!arrangement?.dayrange_list)
+    return false
+
   const dayData = arrangement.dayrange_list.find(
     day => day.year === currentDay.value.year
       && day.month === currentDay.value.month
       && day.day === currentDay.value.day,
   )
-  
-  if (!dayData?.timesection) return false
-  
+
+  if (!dayData?.timesection)
+    return false
+
   const daySections = dayData.timesection
   const startIdx = daySections.findIndex(s => s.id === selectedStartId.value)
   const endIdx = daySections.findIndex(s => s.id === selectedEndId.value)
@@ -177,19 +191,22 @@ function isEndTime(roomId: string, section: ITimeSection): boolean {
 
 // 点击时间段
 function onTimeClick(roomId: string, section: ITimeSection) {
-  if (!isTimeAvailable(roomId, section)) return
+  if (!isTimeAvailable(roomId, section))
+    return
 
   const arrangement = roomsArrangementData.value.get(roomId)
-  if (!arrangement?.dayrange_list) return
-  
+  if (!arrangement?.dayrange_list)
+    return
+
   const dayData = arrangement.dayrange_list.find(
     day => day.year === currentDay.value.year
       && day.month === currentDay.value.month
       && day.day === currentDay.value.day,
   )
-  
-  if (!dayData?.timesection) return
-  
+
+  if (!dayData?.timesection)
+    return
+
   const daySections = dayData.timesection
 
   // 如果没有选中起始时间，设置为起始时间
@@ -235,10 +252,7 @@ function onTimeClick(roomId: string, section: ITimeSection) {
       .some(s => !isTimeAvailable(roomId, s))
 
     if (hasUnavailable) {
-      uni.showToast({
-        title: '选择范围内有不可用时段',
-        icon: 'none',
-      })
+      showMessage('选择范围内有不可用时段。', 'warning')
       return
     }
 
@@ -248,10 +262,7 @@ function onTimeClick(roomId: string, section: ITimeSection) {
       const selectedCount = maxIdx - minIdx
       const maxLimit = arrangement.max_appoint_time
       if (maxLimit && selectedCount > maxLimit) {
-        uni.showToast({
-          title: `该天最多可预约 ${maxLimit / 2} 小时`,
-          icon: 'none',
-        })
+        showMessage(`该天最多可预约 ${maxLimit / 2} 小时。`, 'warning')
         return
       }
     }
@@ -268,29 +279,34 @@ function onTimeClick(roomId: string, section: ITimeSection) {
 
 // 获取选中的时间范围文字
 const selectedTimeRange = computed(() => {
-  if (selectedStartId.value === null || selectedRoomId.value === null) return ''
+  if (selectedStartId.value === null || selectedRoomId.value === null)
+    return ''
 
   const arrangement = roomsArrangementData.value.get(selectedRoomId.value)
-  if (!arrangement?.dayrange_list) return ''
-  
+  if (!arrangement?.dayrange_list)
+    return ''
+
   const dayData = arrangement.dayrange_list.find(
     day => day.year === currentDay.value.year
       && day.month === currentDay.value.month
       && day.day === currentDay.value.day,
   )
-  
-  if (!dayData?.timesection) return ''
-  
+
+  if (!dayData?.timesection)
+    return ''
+
   const daySections = dayData.timesection
   const startSection = daySections.find(s => s.id === selectedStartId.value)
-  if (!startSection) return ''
+  if (!startSection)
+    return ''
 
   if (selectedEndId.value === null) {
     return `${startSection.starttime} 起`
   }
 
   const endSection = daySections.find(s => s.id === selectedEndId.value)
-  if (!endSection) return ''
+  if (!endSection)
+    return ''
 
   // 计算实际的开始和结束时间
   const startIdx = daySections.findIndex(s => s.id === selectedStartId.value)
@@ -311,7 +327,8 @@ const canSubmit = computed(() => {
 
 // 获取选中房间的信息
 const selectedRoom = computed(() => {
-  if (!selectedRoomId.value) return null
+  if (!selectedRoomId.value)
+    return null
   return allRooms.value.find(r => r.Rid === selectedRoomId.value) || null
 })
 
@@ -322,19 +339,22 @@ function goBack() {
 
 // 前往 checkout 页面
 function goToCheckout() {
-  if (!canSubmit.value || !selectedRoom.value || selectedRoomId.value === null) return
+  if (!canSubmit.value || !selectedRoom.value || selectedRoomId.value === null)
+    return
 
   const arrangement = roomsArrangementData.value.get(selectedRoomId.value)
-  if (!arrangement?.dayrange_list) return
-  
+  if (!arrangement?.dayrange_list)
+    return
+
   const dayData = arrangement.dayrange_list.find(
     day => day.year === currentDay.value.year
       && day.month === currentDay.value.month
       && day.day === currentDay.value.day,
   )
-  
-  if (!dayData?.timesection) return
-  
+
+  if (!dayData?.timesection)
+    return
+
   const daySections = dayData.timesection
 
   // 计算实际的开始和结束 id
@@ -369,18 +389,17 @@ async function fetchRooms() {
   }
   catch (error) {
     console.error(error)
-    uni.showToast({
-      icon: 'error',
-      title: '加载房间列表失败',
-    })
+    handleApiException(error)
   }
 }
 
 // 获取所有房间的时间安排
 async function fetchRoomsArrangement() {
-  if (!roomsData.value || allRooms.value.length === 0) return
+  if (!roomsData.value || allRooms.value.length === 0)
+    return
 
   loading.value = true
+  let firstError: unknown
   const promises = allRooms.value.map(async (room) => {
     try {
       const res = await getArrangeByRoom({ Rid: room.Rid })
@@ -388,10 +407,13 @@ async function fetchRoomsArrangement() {
     }
     catch (error) {
       console.error(`加载房间 ${room.Rid} 的时间安排失败:`, error)
+      firstError ??= error
     }
   })
 
   await Promise.all(promises)
+  if (firstError)
+    handleApiException(firstError)
   loading.value = false
 }
 
@@ -410,24 +432,26 @@ onLoad(() => {
     :placeholder="true"
     left-icon="arrow-left"
     @left-click="goBack"
-  >
-  </uv-navbar>
+  />
+  <uv-toast ref="toastRef" />
 
   <!-- 加载状态 -->
   <view v-if="loading" class="flex items-center justify-center py-20">
     <uv-loading-icon mode="circle" />
   </view>
 
-  <view v-else-if="roomsData" class="bg-gray-50 pb-safe min-h-screen">
+  <view v-else-if="roomsData" class="min-h-screen bg-gray-50 pb-safe">
     <!-- 日期选择器 -->
     <view class="mx-3 mt-3 rounded-lg bg-white p-3 shadow-sm">
-      <view class="mb-2 text-sm text-gray-600">选择日期</view>
+      <view class="mb-2 text-sm text-gray-600">
+        选择日期
+      </view>
       <scroll-view scroll-x class="w-full" :show-scrollbar="true">
         <view class="flex flex-row gap-2">
           <view
             v-for="(day, index) in weekDays"
             :key="index"
-            class="flex flex-shrink-0 flex-col items-center justify-center rounded-lg border px-4 py-2 transition-all"
+            class="flex flex-shrink-0 flex-col items-center justify-center border rounded-lg px-4 py-2 transition-all"
             :class="selectedDayIndex === index
               ? 'border-blue-500 bg-blue-500 text-white'
               : 'border-gray-200 bg-white text-gray-700 active:bg-gray-50'"
@@ -455,7 +479,7 @@ onLoad(() => {
     <!-- 图例说明 -->
     <view class="mx-3 mt-2 flex items-center gap-4 text-xs text-gray-500">
       <view class="flex items-center gap-1">
-        <view class="h-3 w-3 rounded border border-gray-200 bg-white" />
+        <view class="h-3 w-3 border border-gray-200 rounded bg-white" />
         <text>可选</text>
       </view>
       <view class="flex items-center gap-1">
@@ -483,7 +507,7 @@ onLoad(() => {
 
     <!-- 时间段表格（每个房间一列，横向滚动） -->
     <scroll-view scroll-x class="mt-3" :show-scrollbar="false">
-      <view class="flex px-3 pb-32 gap-2">
+      <view class="flex gap-2 px-3 pb-32">
         <!-- 每个房间为一列 -->
         <view
           v-for="room in allRooms"
@@ -493,7 +517,7 @@ onLoad(() => {
         >
           <!-- 房间标题（固定在顶部） -->
           <view
-            class="sticky top-0 z-10 mb-2 rounded-lg py-2 text-center h-15"
+            class="sticky top-0 z-10 mb-2 h-15 rounded-lg py-2 text-center"
             :class="selectedRoomId === room.Rid ? 'bg-blue-500 text-white' : 'bg-white text-gray-700 shadow-sm'"
           >
             <text class="text-xs font-medium">{{ room.Rid }}</text>
@@ -511,7 +535,7 @@ onLoad(() => {
               <view
                 v-if="getRoomTimeSection(room.Rid, timeId)"
                 :key="timeId"
-                class="relative flex items-center justify-center rounded-lg border py-2.5 transition-all"
+                class="relative flex items-center justify-center border rounded-lg py-2.5 transition-all"
                 :class="[
                   isTimeAvailable(room.Rid, getRoomTimeSection(room.Rid, timeId)!)
                     ? isTimeSelected(room.Rid, getRoomTimeSection(room.Rid, timeId)!)
@@ -543,7 +567,7 @@ onLoad(() => {
               </view>
               <view
                 v-else
-                class="flex items-center justify-center rounded-lg border border-gray-100 bg-gray-50 py-2.5"
+                class="flex items-center justify-center border border-gray-100 rounded-lg bg-gray-50 py-2.5"
               >
                 <text class="text-xs text-gray-300">-</text>
               </view>
@@ -554,7 +578,7 @@ onLoad(() => {
     </scroll-view>
 
     <!-- 底部确认按钮 -->
-    <view class="fixed bottom-0 left-0 right-0 bg-white px-4 pb-safe pt-3 shadow-lg z-50">
+    <view class="fixed bottom-0 left-0 right-0 z-50 bg-white px-4 pt-3 pb-safe shadow-lg">
       <view class="mb-2 text-center text-sm text-gray-600">
         <text v-if="selectedTimeRange && selectedRoom">
           {{ currentDay.weekday }} {{ selectedTimeRange }} · {{ selectedRoom.Rtitle }}

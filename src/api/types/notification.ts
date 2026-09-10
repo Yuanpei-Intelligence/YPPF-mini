@@ -35,7 +35,12 @@ export interface NotificationStatistics {
 }
 
 export interface NotificationStatusUpdate {
-  status?: NotificationStatus
+  status: NotificationStatus
+}
+
+export interface NotificationBulkOperationResult {
+  message: string
+  count: number
 }
 
 export interface NotificationListQuery {

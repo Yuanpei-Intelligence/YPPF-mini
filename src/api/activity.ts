@@ -12,32 +12,46 @@ import { http } from '@/http/http'
  * - signup_activities: 即将截止报名的活动，按截止时间正序，最多返回10条
  */
 export function getActivityOverview() {
-  return http.get<IActivityHomepage>('/api/v2/activity/overview/')
+  return http.get<IActivityHomepage>('/api/v2/activity/overview/', undefined, undefined, {
+    errorPresentation: 'manual',
+  })
 }
 
 /**
- * 获取指定活动的信息
+ * 获取指定活动的信息（含当前用户的参与状态）
  * @param id 活动ID
  * @returns 活动信息
  */
-export function getActivityInfo(id: number, hideErrorToast = false) {
-  return http.get<IActivityDetail>(`/api/v2/activity/${id}/`, undefined, undefined, { hideErrorToast })
+export function getActivityInfo(id: number) {
+  return http.get<IActivityDetail>(`/api/v2/activity/${id}/`, undefined, undefined, {
+    errorPresentation: 'manual',
+  })
 }
 
 /**
  * 报名指定活动
  * @param id 活动ID
+ * @returns 报名后的参与状态与人数
  */
 export function signUpActivity(id: number) {
-  return http.post<IActivityActionResult>(`/api/v2/activity/${id}/signup/`)
+  return http.post<IActivityActionResult>(
+    `/api/v2/activity/${id}/signup/`,
+    undefined,
+    undefined,
+    undefined,
+    { errorPresentation: 'manual' },
+  )
 }
 
 /**
  * 取消指定活动的报名
  * @param id 活动ID
+ * @returns 取消后的参与状态与人数
  */
 export function withdrawActivitySignup(id: number) {
-  return http.delete<IActivityActionResult>(`/api/v2/activity/${id}/signup/`)
+  return http.delete<IActivityActionResult>(`/api/v2/activity/${id}/signup/`, undefined, undefined, {
+    errorPresentation: 'manual',
+  })
 }
 
 /**
@@ -46,5 +60,11 @@ export function withdrawActivitySignup(id: number) {
  * @returns 签到结果
  */
 export function checkInActivity(id: number) {
-  return http.post<ICheckInRes>(`/api/v2/activity/checkin/`, { aid: id })
+  return http.post<ICheckInRes>(
+    '/api/v2/activity/checkin/',
+    { aid: id },
+    undefined,
+    undefined,
+    { errorPresentation: 'manual' },
+  )
 }
