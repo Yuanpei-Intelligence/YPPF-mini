@@ -1,36 +1,79 @@
-// 测试用的 iconfont，可生效
-// @import './iconfont.css';
+// Global styles (compiled into app.wxss). SCSS token variables come from src/uni.scss,
+// which uni-app injects into every SCSS compilation.
 
-.test {
-  // 可以通过 @apply 多个样式封装整体样式
-  @apply mt-4 ml-4;
-
-  padding-top: 4px;
-  color: red;
-}
-
-:root,
+// ---- Runtime design tokens ------------------------------------------------
+// Declared on `page` so every page and custom component inherits them.
+// Use as `var(--yp-*)` in <style>, or through UnoCSS theme classes (see uno.config.ts).
 page {
-  // 修改按主题色
-  // --wot-color-theme: #37c2bc;
+  --yp-color-primary: #{$yp-color-primary};
+  --yp-color-primary-dark: #{$yp-color-primary-dark};
+  --yp-color-primary-light: #{$yp-color-primary-light};
+  --yp-color-primary-disabled: #{$yp-color-primary-disabled};
+  --yp-color-success: #{$yp-color-success};
+  --yp-color-success-dark: #{$yp-color-success-dark};
+  --yp-color-success-light: #{$yp-color-success-light};
+  --yp-color-warning: #{$yp-color-warning};
+  --yp-color-warning-dark: #{$yp-color-warning-dark};
+  --yp-color-warning-light: #{$yp-color-warning-light};
+  --yp-color-error: #{$yp-color-error};
+  --yp-color-error-dark: #{$yp-color-error-dark};
+  --yp-color-error-light: #{$yp-color-error-light};
+  --yp-color-info: #{$yp-color-info};
+  --yp-color-info-dark: #{$yp-color-info-dark};
+  --yp-color-info-light: #{$yp-color-info-light};
+  --yp-color-brand: #{$yp-color-brand};
+  --yp-color-brand-light: #{$yp-color-brand-light};
 
-  // 修改按钮背景色
-  // --wot-button-primary-bg-color: green;
+  --yp-text-1: #{$yp-text-1};
+  --yp-text-2: #{$yp-text-2};
+  --yp-text-3: #{$yp-text-3};
+  --yp-text-4: #{$yp-text-4};
+  --yp-text-inverse: #{$yp-text-inverse};
+
+  --yp-bg-page: #{$yp-bg-page};
+  --yp-bg-card: #{$yp-bg-card};
+  --yp-bg-fill: #{$yp-bg-fill};
+  --yp-bg-fill-active: #{$yp-bg-fill-active};
+  --yp-mask: #{$yp-mask};
+  --yp-border: #{$yp-border};
+  --yp-border-light: #{$yp-border-light};
+
+  --yp-radius-sm: #{$yp-radius-sm};
+  --yp-radius-md: #{$yp-radius-md};
+  --yp-radius-lg: #{$yp-radius-lg};
+  --yp-radius-xl: #{$yp-radius-xl};
+
+  --yp-font-xs: #{$yp-font-xs};
+  --yp-font-sm: #{$yp-font-sm};
+  --yp-font-base: #{$yp-font-base};
+  --yp-font-lg: #{$yp-font-lg};
+  --yp-font-xl: #{$yp-font-xl};
+  --yp-font-2xl: #{$yp-font-2xl};
+
+  --yp-space-gutter: #{$yp-space-gutter};
+  --yp-space-card: #{$yp-space-card};
+  --yp-space-section: #{$yp-space-section};
+
+  --yp-shadow-card: #{$yp-shadow-card};
+  --yp-shadow-float: #{$yp-shadow-float};
+
+  // wot-design-uni bridge for the few legacy `wd-*` usages still around.
+  --wot-color-theme: #{$yp-color-primary};
+  --wot-color-success: #{$yp-color-success};
+  --wot-color-warning: #{$yp-color-warning};
+  --wot-color-danger: #{$yp-color-error};
+
+  background-color: var(--yp-bg-page);
+  color: var(--yp-text-1);
+  font-family: $yp-font-family;
+  font-size: var(--yp-font-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-/*
-border-t-1
-由于uniapp中无法使用*选择器，使用魔法代替*，加上此规则可以简化border与divide的使用，并提升布局的兼容性
-1. 防止padding和border影响元素宽度。 (https://github.com/mozdevs/cssremedy/issues/4)
-2. 允许仅通过添加边框宽度来向元素添加边框。 (https://github.com/tailwindcss/tailwindcss/pull/116)
-3. [UnoCSS]: 允许使用css变量'--un-default-border-color'覆盖默认边框颜色
-*/
-// 这个样式有重大BUG，先去掉！！(2025-08-15)
-// :not(not),
-// ::before,
-// ::after {
-//   box-sizing: border-box; /* 1 */
-//   border-width: 0; /* 2 */
-//   border-style: solid; /* 2 */
-//   border-color: var(--un-default-border-color, #e5e7eb); /* 3 */
-// }
+// ---- Native element resets --------------------------------------------------
+// Native <button> keeps a pseudo-element border in WeChat; remove it once globally
+// instead of per page. Visual button styles come from the `btn-*` UnoCSS shortcuts.
+button::after {
+  border: none;
+}
