@@ -2,6 +2,7 @@
 import type { Settings, SettingsPatch } from '@/api/types/timetable'
 import type { FilterSourceItem, FilterTagItem } from '@/utils/timetable'
 import { computed, ref } from 'vue'
+import { tokens } from '@/style/tokens'
 import { buildFilterPatch, filterSources, filterTags } from '@/utils/timetable'
 
 /*
@@ -82,52 +83,52 @@ defineExpose({ open, close })
   <uv-popup ref="popup" mode="bottom" :round="16" :safe-area-inset-bottom="true">
     <view class="px-5 pb-5 pt-5">
       <view class="flex items-center justify-between">
-        <text class="text-base text-gray-900 font-bold">筛选日程</text>
-        <text class="text-xs text-gray-400">对首页日程、课表、日历订阅与提醒一并生效</text>
+        <text class="text-base text-fg-1 font-bold">筛选日程</text>
+        <text class="text-xs text-fg-3">对首页日程、课表、日历订阅与提醒一并生效</text>
       </view>
 
       <scroll-view scroll-y class="filter-body mt-3">
         <view class="flex items-center justify-between">
-          <text class="text-sm text-gray-500">来源</text>
-          <text class="text-xs text-blue-600 active:opacity-60" @click="setAllSources(!allSourcesOn)">
+          <text class="text-sm text-fg-2">来源</text>
+          <text class="text-xs text-primary active:opacity-60" @click="setAllSources(!allSourcesOn)">
             {{ allSourcesOn ? '全部关闭' : '全部显示' }}
           </text>
         </view>
         <view
           v-for="(item, index) in sources"
           :key="item.key"
-          class="flex items-center justify-between border-b border-gray-50 py-2.5 last:border-none"
+          class="flex items-center justify-between border-b border-line-light py-2.5 last:border-none"
         >
-          <text class="text-sm text-gray-800">{{ item.label }}</text>
+          <text class="text-sm text-fg-1">{{ item.label }}</text>
           <uv-switch
             :model-value="item.enabled"
             size="22"
-            active-color="#2563eb"
+            :active-color="tokens.primary"
             @change="(value: boolean) => toggleSource(index, value)"
           />
         </view>
 
         <template v-if="tagsSupported">
           <view class="mt-4 flex items-center justify-between">
-            <text class="text-sm text-gray-500">标签</text>
-            <text v-if="tags.length" class="text-xs text-blue-600 active:opacity-60" @click="setAllTags(!allTagsOn)">
+            <text class="text-sm text-fg-2">标签</text>
+            <text v-if="tags.length" class="text-xs text-primary active:opacity-60" @click="setAllTags(!allTagsOn)">
               {{ allTagsOn ? '全部关闭' : '全部显示' }}
             </text>
           </view>
           <view
             v-for="(item, index) in tags"
             :key="item.tag"
-            class="flex items-center justify-between border-b border-gray-50 py-2.5 last:border-none"
+            class="flex items-center justify-between border-b border-line-light py-2.5 last:border-none"
           >
-            <text class="min-w-0 flex-1 truncate pr-3 text-sm text-gray-800">{{ item.tag }}</text>
+            <text class="min-w-0 flex-1 truncate pr-3 text-sm text-fg-1">{{ item.tag }}</text>
             <uv-switch
               :model-value="item.enabled"
               size="22"
-              active-color="#2563eb"
+              :active-color="tokens.primary"
               @change="(value: boolean) => toggleTag(index, value)"
             />
           </view>
-          <text v-if="!tags.length" class="block py-2 text-xs text-gray-400 leading-5">
+          <text v-if="!tags.length" class="block py-2 text-xs text-fg-3 leading-5">
             还没有标签。编辑日程时填写标签（如“选修”“旁听”），就可以在这里按标签筛选。
           </text>
         </template>
@@ -135,14 +136,14 @@ defineExpose({ open, close })
 
       <view class="mt-4 flex gap-3">
         <button
-          class="flex-1 border border-gray-200 rounded-lg bg-white py-2.5 text-sm text-gray-700 font-medium"
+          class="btn-outline flex-1"
           :disabled="saving"
           @click="close"
         >
           取消
         </button>
         <button
-          class="flex-1 rounded-lg bg-blue-500 py-2.5 text-sm text-white font-medium"
+          class="btn-primary flex-1"
           :disabled="saving"
           @click="save"
         >
@@ -156,9 +157,5 @@ defineExpose({ open, close })
 <style lang="scss" scoped>
 .filter-body {
   max-height: 55vh;
-}
-
-button::after {
-  border: none;
 }
 </style>

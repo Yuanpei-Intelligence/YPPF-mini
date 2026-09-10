@@ -4,6 +4,7 @@ import type { RequestError } from '@/http/errors'
 import type { DetailActionKey } from '@/utils/timetable'
 import { computed, ref } from 'vue'
 import { deleteEntry, deleteOverrides, getEntry, updateEntry } from '@/api/timetable'
+import { tokens } from '@/style/tokens'
 import { confirmModal } from '@/utils/dialog'
 import {
   isEditableOccurrence,
@@ -162,7 +163,7 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
       title: '确认删除',
       content: `删除后「${item.title}」将从课表中移除，无法恢复。`,
       confirmText: '删除',
-      confirmColor: '#dc2626',
+      confirmColor: tokens.error,
     })
     if (!ok)
       return false
