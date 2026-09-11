@@ -1143,11 +1143,14 @@ function drawTermGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout:
     const y = gridTop + gap.y
     ctx.fillStyle = theme.grid.suspended
     ctx.fillRect(innerLeft, y, innerWidth, gap.height)
+    // 分隔带文字只写在左侧节次列里：连时刻放得下就一起写，放不下只写「午休」「晚饭」
     ctx.fillStyle = theme.text.muted
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
     setFont(ctx, 9)
-    ctx.fillText(`${gap.label} ${gap.start}–${gap.end}`, innerLeft + 4, y + gap.height / 2)
+    const room = TERM_LEFT_COL - 8
+    const label = `${gap.label} ${gap.start}–${gap.end}`
+    ctx.fillText(fitText(ctx, ctx.measureText(label).width <= room ? label : gap.label, room), innerLeft + 4, y + gap.height / 2)
     strokeLine(ctx, innerLeft, y, right, y)
   }
   sectionList.forEach((row, index) => {

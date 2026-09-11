@@ -35,81 +35,118 @@ function compareText(a: string, b: string): number {
 
 /* -------------------- 折行 -------------------- */
 
-/** 不放在行首的标点（闭括号与句读）：换行时带上前一个字 */
+/** 不放在行首的标点（闭括号与句读）：换行时带上前一个词或字 */
 const NO_LINE_START = new Set(Array.from('）)]】」』》〉，。、；：！？,.;:!?%'))
-/** 不放在行尾的标点（开括号）：换行时跟下一个字走 */
+/** 不放在行尾的标点（开括号）：换行时跟下一个词或字走 */
 const NO_LINE_END = new Set(Array.from('（([【「『《〈'))
 const BLANK_RE = /^\s+$/
 /**
- * 折行单位：连续的字母、数字与常见连接符算一个词，空白算一段，其余逐字（代理对算一个字）。
+ * 折行单位：连续的字母、数字与常见连接符算一个词，空白算一段，其余（汉字、标点）逐字（代理对算一个字）。
  * 工程编译目标是 ES5，正则不能用 u 标志
  */
 const TOKEN_RE = /[\w'’+#.-]+|\s+|[\uD800-\uDBFF][\uDC00-\uDFFF]|\S/g
 /** 只在空白与逗号后折行的折行单位（周次文字：`1-15周 单周`、`1-8,10-16周`） */
 const WORD_TOKEN_RE = /[^\s,，]+[,，]?|[,，]|\s+/g
-/** words 模式下片段比整行还宽时，先在连字符后拆（`13:30–` `14:30`），不在数字中间断开 */
-const DASH_PIECE_RE = /[^–-]+[–-]?|[–-]/g
+/** 一个词比整行还宽时先在词内的连接符后拆（`13:30–` `14:30`、`Science-` `Building`） */
+const PUNCTUATION_PIECE_RE = /[^–.'’+#-]+[–.'’+#-]*|[–.'’+#-]+/g
+const LATIN_LETTER_RE = /^[a-z]$/i
 
-/** chars：按词与单字折行（课程名、地点）；words：只在空白与逗号处折行（周次），片段太长再逐字拆 */
+/** chars：汉字逐字、西文按词折行（课程名、地点、教师）；words：只在空白与逗号处折行（周次） */
 export type WrapMode = 'chars' | 'words'
 
-/** 换行处的避头尾：最多把两个字挪到下一行，挪完放不下就不挪 */
-function carryPunctuation(line: string, token: string, maxWidth: number, measure: (value: string) => number) {
-  const chars = Array.from(line.trimEnd())
-  let next = token
+/** 换行处的避头尾：行首不留闭括号与句读、行尾不留开括号，最多把行尾两个词（字）带到下一行，带过去放不下就不带 */
+function carryTokens(line: string[], token: string, maxWidth: number, measure: (value: string) => number) {
+  const kept = [...line]
+  while (kept.length && BLANK_RE.test(kept[kept.length - 1]))
+    kept.pop()
+  const next = [token]
   let moved = 0
-  while (chars.length > 1 && moved < 2) {
-    const last = chars[chars.length - 1]
-    if (!NO_LINE_START.has(Array.from(next)[0]) && !NO_LINE_END.has(last))
+  while (kept.length > 1 && moved < 2) {
+    const last = kept[kept.length - 1]
+    const lastChar = Array.from(last).pop() ?? ''
+    if (!NO_LINE_START.has(Array.from(next[0])[0]) && !NO_LINE_END.has(lastChar))
       break
-    if (measure(last + next) > maxWidth)
+    if (measure(last + next.join('')) > maxWidth)
       break
-    chars.pop()
-    next = last + next
+    kept.pop()
+    next.unshift(last)
     moved++
   }
-  return { line: chars.join(''), next }
+  return { kept, next }
 }
 
 /**
- * 按宽度把 text 折成多行，不截断、不加省略号。
- * 一个词比整行还宽时逐字拆开；列窄到放不下一个字时该字独占一行。
+ * 把比整行还宽的一个词硬断成几段，每段尽量填满一行，在两个字母之间断开时补连字符。
+ * 前几段各占一整行，最后一段是剩下的部分，后面的词可以接着排。
+ */
+function hardBreak(word: string, maxWidth: number, measure: (value: string) => number): string[] {
+  const chars = Array.from(word)
+  const pieces: string[] = []
+  let head = ''
+  chars.forEach((char, index) => {
+    const joinsNext = index + 1 < chars.length && LATIN_LETTER_RE.test(char) && LATIN_LETTER_RE.test(chars[index + 1])
+    if (!head || measure(head + char + (joinsNext ? '-' : '')) <= maxWidth) {
+      head += char
+      return
+    }
+    const splitsLetters = LATIN_LETTER_RE.test(head.slice(-1)) && LATIN_LETTER_RE.test(char)
+    pieces.push(splitsLetters ? `${head}-` : head)
+    head = char
+  })
+  pieces.push(head)
+  return pieces
+}
+
+/**
+ * 按宽度把 text 折成多行，不截断、不加省略号。汉字可在任意两字之间断开，西文词和数字只在空白或标点处断开；
+ * 只有一个词本身比整行还宽时才在词内硬断，并且从新的一行开始，不把词头挤到上一行末尾。
  */
 export function wrapLines(text: string, maxWidth: number, measure: (value: string) => number, mode: WrapMode = 'chars'): string[] {
   const tokens = text.trim().match(mode === 'words' ? WORD_TOKEN_RE : TOKEN_RE) ?? []
   const lines: string[] = []
-  let line = ''
+  let line: string[] = []
+  const flush = () => {
+    const value = line.join('').trimEnd()
+    if (value)
+      lines.push(value)
+    line = []
+  }
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index]
     const blank = BLANK_RE.test(token)
-    if (!line && blank)
+    if (!line.length && blank)
       continue
-    if (measure(line + token) <= maxWidth) {
-      line += token
-      continue
-    }
-    const chars = Array.from(token)
-    if (chars.length > 1 && measure(token) > maxWidth) {
-      const pieces = mode === 'words' ? token.match(DASH_PIECE_RE) ?? [] : []
-      tokens.splice(index, 1, ...(pieces.length > 1 ? pieces : chars))
-      index--
-      continue
-    }
-    if (!line) {
-      lines.push(token)
+    if (measure(line.join('') + token) <= maxWidth) {
+      line.push(token)
       continue
     }
     if (blank) {
-      lines.push(line.trimEnd())
-      line = ''
+      flush()
       continue
     }
-    const carried = carryPunctuation(line, token, maxWidth, measure)
-    lines.push(carried.line)
+    if (Array.from(token).length > 1 && measure(token) > maxWidth) {
+      const pieces = token.match(PUNCTUATION_PIECE_RE) ?? []
+      if (pieces.length > 1) {
+        tokens.splice(index, 1, ...pieces)
+        index--
+        continue
+      }
+      flush()
+      const broken = hardBreak(token, maxWidth, measure)
+      lines.push(...broken.slice(0, -1))
+      line = [broken[broken.length - 1]]
+      continue
+    }
+    if (!line.length) {
+      lines.push(token)
+      continue
+    }
+    const carried = carryTokens(line, token, maxWidth, measure)
+    line = carried.kept
+    flush()
     line = carried.next
   }
-  if (line.trimEnd())
-    lines.push(line.trimEnd())
+  flush()
   return lines
 }
 
@@ -585,7 +622,10 @@ function fitRowHeights(clusters: TermCluster[], rowCount: number, gapAfter: numb
   return heights.map(height => Math.ceil(height - 1e-6))
 }
 
-/** 把组内各块自上而下排进行区间，多出的高度平分给每块 */
+/**
+ * 把组内各块自上而下排进行区间，多出的高度平分给每块。
+ * 跨过午休 / 晚饭分隔带的时段（如 4–5 节连上）有意画成连续的一整块、盖在分隔带上，不在分隔带处断开。
+ */
 function stackParts(cluster: TermCluster, rowTops: number[], rowHeights: number[], metrics: TermGridMetrics) {
   const top = rowTops[cluster.top] + metrics.inset
   const bottom = rowTops[cluster.bottom - 1] + rowHeights[cluster.bottom - 1] - metrics.inset
@@ -669,8 +709,11 @@ export function describeExam(exam: OverviewExam): string {
     const weekday = weekdayOf(exam.date)
     parts.push(weekday ? `${chineseDate(exam.date)} 周${WEEKDAY_LABELS[weekday - 1]}` : exam.date)
   }
-  if (exam.start)
-    parts.push(`${dayPeriod(exam.start)} ${exam.start}${exam.end ? `–${exam.end}` : ''}`)
+  if (exam.start) {
+    // 结束于 23:59 的与网格一样写成 24:00
+    const end = exam.end ? formatMinutes(spanMinutes(exam.start, exam.end).end) : ''
+    parts.push(`${dayPeriod(exam.start)} ${exam.start}${end ? `–${end}` : ''}`)
+  }
   if (!parts.length)
     parts.push('时间待定')
   if ((exam.location || '').trim())
