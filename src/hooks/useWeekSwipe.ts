@@ -33,10 +33,10 @@ export interface EdgeHint {
 }
 
 export interface UseWeekSwipeOptions {
-  /** Whether the neighbouring week exists */
-  canGo: (direction: WeekDirection) => boolean
-  /** Show the neighbouring week; resolves once it is on screen or the request has failed */
-  go: (direction: WeekDirection) => Promise<void>
+  /** The week a swipe towards `direction` would show, or null when there is none (rubber band) */
+  targetWeek: (direction: WeekDirection) => number | null
+  /** Show `week`, fixed when the finger lifts; resolves once it is on screen or the request has failed */
+  go: (week: number) => Promise<void>
   /** A horizontal drag has started */
   onDragStart?: () => void
 }
@@ -144,9 +144,16 @@ export function useWeekSwipe(options: UseWeekSwipeOptions) {
   }
 
   function onTouchStart(event: SwipeTouchEvent) {
-    resetGesture()
-    if (phase.value !== 'idle' || (event.touches?.length ?? 0) > 1)
+    // A second finger, or a new touch while a drag never saw its touchend: give the drag up and settle.
+    // Returning silently here would leave the phase at 'drag' and block every later swipe and tap.
+    if ((event.touches?.length ?? 0) > 1 || phase.value === 'drag') {
+      onTouchCancel()
       return
+    }
+    // Settling or sliding: that animation ends on its own timer
+    if (phase.value !== 'idle')
+      return
+    resetGesture()
     const point = firstTouch(event.touches)
     if (point)
       start = { x: point.clientX, y: point.clientY }
@@ -178,7 +185,7 @@ export function useWeekSwipe(options: UseWeekSwipeOptions) {
     }
     const towards: WeekDirection = dx < 0 ? 1 : -1
     direction.value = towards
-    blocked.value = !options.canGo(towards)
+    blocked.value = options.targetWeek(towards) === null
     offset.value = blocked.value
       ? Math.sign(dx) * Math.min(Math.abs(dx) * EDGE_RESISTANCE, EDGE_MAX_OFFSET)
       : dx
@@ -203,8 +210,12 @@ export function useWeekSwipe(options: UseWeekSwipeOptions) {
     const horizontal = axis === 'x'
     const recent = samples
     resetGesture()
-    if (!began || !horizontal || phase.value !== 'drag')
+    if (!began || !horizontal || phase.value !== 'drag') {
+      // A drag without its start must not stay in 'drag'
+      if (phase.value === 'drag')
+        void settle()
       return
+    }
     const now = Date.now()
     const point = firstTouch(event.changedTouches)
     if (point)
@@ -220,12 +231,14 @@ export function useWeekSwipe(options: UseWeekSwipeOptions) {
       void settle()
       return
     }
-    if (!options.canGo(towards)) {
+    // Fix the target now: once the slide-out has finished, the shown week may already be another one
+    const target = options.targetWeek(towards)
+    if (target === null) {
       direction.value = towards
       void bounce()
       return
     }
-    void slide(towards, () => options.go(towards))
+    void slide(towards, () => options.go(target))
   }
 
   function onTouchCancel() {

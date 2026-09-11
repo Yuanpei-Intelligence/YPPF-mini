@@ -6,7 +6,7 @@ import type { WeekDirection } from '@/hooks/useWeekSwipe'
 import type { PaletteColor, TimetableDensity, WeekendMode, WeekPickerItem } from '@/utils/timetable'
 import type { GridMetrics, OverlapGroup } from '@/utils/timetable-grid'
 import { onLoad, onPullDownRefresh, onResize, onShareAppMessage, onShow, onUnload } from '@dcloudio/uni-app'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { getWeek, listEntries } from '@/api/timetable'
 import OccurrenceDetailSheet from '@/components/OccurrenceDetailSheet.vue'
 import { useApiException } from '@/hooks/useApiException'
@@ -200,8 +200,8 @@ const {
   onTouchCancel,
   slide,
 } = useWeekSwipe({
-  canGo,
-  go: direction => showWeek((view.value?.week ?? 0) + direction),
+  targetWeek,
+  go: week => showWeek(week),
   onDragStart: dismissSwipeHint,
 })
 
@@ -445,12 +445,13 @@ function clearWeekCache() {
   cacheGeneration++
 }
 
-function canGo(direction: WeekDirection) {
+/** The week a swipe towards `direction` would show; null past the first or the last week */
+function targetWeek(direction: WeekDirection): number | null {
   const current = view.value
   if (!current)
-    return false
+    return null
   const next = current.week + direction
-  return next >= 1 && next <= current.term.total_weeks
+  return next >= 1 && next <= current.term.total_weeks ? next : null
 }
 
 function showView(data: WeekView) {
@@ -569,23 +570,34 @@ function followShownWeek() {
     selected.value = current.week === current.today.week ? null : { term: current.term.code, week: current.week }
 }
 
+/** A week picked (week picker, 回到本周) while a swipe was still sliding; shown once the grid is idle */
+let queuedWeek: number | null = null
+
+watch(swipeBusy, (busy) => {
+  if (busy || queuedWeek === null)
+    return
+  const week = queuedWeek
+  queuedWeek = null
+  transitionToWeek(week)
+})
+
 /** Slide to `week` from the week picker or 回到本周 (swipes go through useWeekSwipe directly) */
 function transitionToWeek(week: number) {
+  // Racing a running swipe would land on the swipe's week instead; wait for it to finish
+  if (swipeBusy.value) {
+    queuedWeek = week
+    return
+  }
   const current = view.value
   if (!current || week === current.week)
     return
-  if (swipeBusy.value) {
-    void showWeek(week)
-    return
-  }
   void slide(week > current.week ? 1 : -1, () => showWeek(week))
 }
 
 function goCurrentWeek() {
-  const current = view.value
-  if (!current?.today.week || current.week === current.today.week)
-    return
-  transitionToWeek(current.today.week)
+  const today = view.value?.today.week
+  if (today)
+    transitionToWeek(today)
 }
 
 function openWeekPicker() {
@@ -713,6 +725,8 @@ onShow(() => {
   reloadLocalPrefs()
   weekendMode.value = readWeekendMode()
   density.value = readDensity(userStore.userInfo.username)
+  // The window may have changed size while another page was on top
+  windowMetrics.value = readWindowMetrics()
   if (shownBefore)
     void refresh()
   shownBefore = true
