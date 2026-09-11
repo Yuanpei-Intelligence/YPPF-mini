@@ -11,6 +11,7 @@ import {
   describeOccurrenceTime,
   describeWeeks,
   detailActionsFor,
+  displayEndClock,
   entrySpansWeeks,
   KIND_LABELS,
   ROLE_LABELS,
@@ -113,7 +114,7 @@ const overlapItems = computed(() => [...props.overlaps]
   .map(item => ({
     occurrence: item,
     color: colorForOccurrence(item).fg,
-    meta: `${KIND_LABELS[item.kind] ?? ''} ${clockOf(item.start)}–${clockOf(item.end)}`,
+    meta: `${KIND_LABELS[item.kind] ?? ''} ${clockOf(item.start)}–${displayEndClock(item)}`,
   })))
 
 const actions = computed<DetailAction[]>(() => (
