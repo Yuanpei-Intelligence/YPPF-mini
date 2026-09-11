@@ -13,6 +13,7 @@ import {
 } from '@/api/login'
 import { isDoubleTokenRes, isSingleTokenRes } from '@/api/types/login'
 import { isDoubleTokenMode } from '@/utils'
+import { clearPersonalStorage } from '@/utils/personal-storage'
 import { useUserStore } from './user'
 
 // 初始化状态
@@ -155,7 +156,7 @@ export const useTokenStore = defineStore(
      * username来判断当前登录的是哪一个，后续token过期了刷新的时候，还需要这个username来续期
      * @returns 登录结果，如果status=unbound则是没绑定
      */
-    const wxLogin = async (username?: string) => {
+    const _wxLoginOnce = async (username?: string) => {
       try {
         // 获取微信小程序登录的code
         // 首先从微信API获取code
@@ -189,6 +190,20 @@ export const useTokenStore = defineStore(
     }
 
     /**
+     * 微信登录（单飞）：启动时的登录和多个请求同时 401 触发的重登只共用一次 wx.login。
+     * 后端对同一 openid 重新签发 signed_openid 会把之前的凭据作废，并发调用会让先打开的绑定页拿到已失效的凭据。
+     */
+    let wxLoginInFlight: Promise<IWxLoginRes> | null = null
+    const wxLogin = (username?: string): Promise<IWxLoginRes> => {
+      if (!wxLoginInFlight) {
+        wxLoginInFlight = _wxLoginOnce(username).finally(() => {
+          wxLoginInFlight = null
+        })
+      }
+      return wxLoginInFlight
+    }
+
+    /**
      * 退出登录 并 删除用户信息
      */
     const logout = async () => {
@@ -212,6 +227,8 @@ export const useTokenStore = defineStore(
         uni.removeStorageSync('refreshTokenExpireTime')
         tokenInfo.value = { ...tokenInfoState }
         uni.removeStorageSync('token')
+        // Schedules, hidden events, reminder state and the remembered portal password of every account
+        clearPersonalStorage()
       }
     }
 
