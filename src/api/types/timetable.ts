@@ -195,7 +195,10 @@ export interface Occurrence {
   end_section: number | null
   /** 稳定配色键（课程名或 id） */
   color_key: string
-  /** '' | 'canceled' | 'checked_in' | 'applied' | 'suspended'（校历停课日上不了的课，照常返回，由前端淡化显示） */
+  /**
+   * '' | 'canceled' | 'checked_in' | 'applied' | 'suspended'。suspended：校历停课日（放假、停课复习考试，或按别的周几上课的
+   * 调休日自己那天）的课，照常返回但不提醒、不参与冲突检测、不进 ICS；原因看当天的校历信息（WeekDay / AgendaDay）
+   */
   status: string
   /** {'entry_id'} | {'course_id','activity_id'} | {'activity_id'} | {'appoint_id'} | {'exam_id','entry_id'} */
   ref: Record<string, number | null>
@@ -206,7 +209,7 @@ export interface Occurrence {
   tag?: string
   /** 本次日程被单次 / 分段调整过。尚未升级的后端不返回 */
   modified?: boolean
-  /** 调休日按另一天课表上的课：原本的星期（1=周一 … 7=周日）；其余日程为 null 或不返回 */
+  /** 调休日按别的周几上课时，搬来的这节课原本的周几（1=周一 … 7=周日）；其它为 null。尚未升级的后端不返回 */
   swap_from?: number | null
 }
 
@@ -238,6 +241,8 @@ export interface OverrideFields {
   note?: string
   tag?: string
   color?: string
+  /** 照常上课：校历停课日也按普通日程返回并提醒，不产生调休副本；false 撤销。canceled 仍优先 */
+  ignore_calendar?: boolean
 }
 
 /**
@@ -314,12 +319,15 @@ export type EntryIn = Omit<Entry, 'id' | 'source' | 'term' | 'catalog' | 'overri
  * `PATCH entries/{id}/`。scope 缺省为 all：手动条目改行本身；任何来源的 hidden / color / tag / role / category / catalog_id
  * 改行本身，门户 / 粘贴条目的其它字段存为整段调整（重新导入后保留）。
  * single / following 需给 week，改动存为该周 / 该周起的调整，可带 canceled（本次停课）；
+ * ignore_calendar（照常上课 / 恢复按校历停课）三种 scope 都可带；
  * hidden / role / category / catalog_id 只能在 scope=all 下改。
  */
 export interface EntryPatch extends Partial<EntryIn> {
   scope?: EditScope
   week?: number
   canceled?: boolean
+  /** true 照常上课，false 恢复按校历停课 */
+  ignore_calendar?: boolean
 }
 
 export interface EntriesQuery {

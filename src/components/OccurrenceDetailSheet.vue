@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import type { EditScope, Entry, Occurrence } from '@/api/types/timetable'
+import type { EditScope, Entry, Occurrence, WeekDay } from '@/api/types/timetable'
 import type { DetailAction, DetailActionKey } from '@/utils/timetable'
 import { computed, ref } from 'vue'
 import {
@@ -13,16 +13,23 @@ import {
   detailActionsFor,
   displayEndClock,
   entrySpansWeeks,
+  heldDespiteCalendar,
+  heldNotice,
+  isSuspended,
   KIND_LABELS,
   ROLE_LABELS,
   SCOPE_LABELS,
   STATUS_LABELS,
+  suspendedNotice,
+  swapDescription,
+  swapNote,
 } from '@/utils/timetable'
 
 /*
  * 日程详情底部弹层（课表页与日视图共用）。
  * 只负责展示与收集操作意图：条目详情由父页面加载后传入，点操作按钮通过 action / edit 事件交给父页面执行。
- * 「编辑」在条目跨多周时先弹范围选择（仅本次 / 本次及以后 / 全部），再以 edit 事件带出范围。
+ * 「编辑」在条目跨多周时先弹范围选择（仅本次 / 本次及以后 / 全部），再以 edit 事件带出范围；
+ * 「照常上课」「恢复按校历停课」同样先选范围，以 action 事件带出（单周条目直接用仅本次）。
  * The week grid draws one occurrence per overlapping slot and passes the others as `overlaps`;
  * they are listed as a switcher and picking one emits `switch`.
  */
@@ -39,6 +46,8 @@ const props = withDefaults(defineProps<{
   busy?: boolean
   /** Other occurrences in the same slot of the week grid */
   overlaps?: Occurrence[]
+  /** 这天的校历信息（停课原因、调休），取自 week/ 的 days；没有为 null */
+  calendarDay?: WeekDay | null
 }>(), {
   entry: null,
   entryLoading: false,
@@ -46,10 +55,11 @@ const props = withDefaults(defineProps<{
   hidden: false,
   busy: false,
   overlaps: () => [],
+  calendarDay: null,
 })
 
 const emit = defineEmits<{
-  action: [key: Exclude<DetailActionKey, 'edit'>]
+  action: [key: Exclude<DetailActionKey, 'edit'>, scope?: EditScope]
   edit: [scope: EditScope]
   switch: [occurrence: Occurrence]
 }>()
@@ -64,15 +74,27 @@ interface ScopeAction {
   scope: EditScope
 }
 
+/** Actions that ask for a week range first */
+type ScopedActionKey = Extract<DetailActionKey, 'edit' | 'hold' | 'unhold'>
+
+const SCOPE_TITLES: Record<ScopedActionKey, string> = {
+  edit: '修改哪些周次？',
+  hold: '哪些周次照常上课？',
+  unhold: '哪些周次恢复按校历停课？',
+}
+
 const popup = ref<PopupInstance | null>(null)
 const scopeSheet = ref<PopupInstance | null>(null)
+/** Which action the scope sheet is choosing weeks for */
+const scopeFor = ref<ScopedActionKey>('edit')
 
 const SCOPE_ACTIONS: ScopeAction[] = (['single', 'following', 'all'] as EditScope[])
   .map(scope => ({ name: SCOPE_LABELS[scope], scope }))
 
 const color = computed(() => (props.occurrence ? colorForOccurrence(props.occurrence) : null))
 const time = computed(() => (props.occurrence ? describeOccurrenceTime(props.occurrence) : ''))
-const status = computed(() => (props.occurrence ? STATUS_LABELS[props.occurrence.status] ?? '' : ''))
+// 停课的课由校历说明代替状态行
+const status = computed(() => (props.occurrence && !isSuspended(props.occurrence) ? STATUS_LABELS[props.occurrence.status] ?? '' : ''))
 const kindLabel = computed(() => (props.occurrence ? KIND_LABELS[props.occurrence.kind] ?? '' : ''))
 /** 已选 / 旁听：优先用条目详情，其次日程自带的 role */
 const roleLabel = computed(() => {
@@ -81,6 +103,19 @@ const roleLabel = computed(() => {
 })
 const tag = computed(() => props.entry?.tag ?? props.occurrence?.tag ?? '')
 const modified = computed(() => !!props.occurrence?.modified)
+/** 已设为照常上课：校历停课日按普通日程显示的存储课程 */
+const held = computed(() => !!props.occurrence && heldDespiteCalendar(props.occurrence, props.calendarDay, props.entry))
+/** 校历说明：本次停课 / 已设为照常上课 / 调休 */
+const calendarNotice = computed(() => {
+  const occurrence = props.occurrence
+  if (!occurrence)
+    return ''
+  if (isSuspended(occurrence))
+    return suspendedNotice(occurrence, props.calendarDay)
+  if (held.value)
+    return heldNotice(occurrence, props.calendarDay)
+  return swapDescription(occurrence)
+})
 
 /** 条目详情行：只列有值的 */
 const detailRows = computed<{ icon: string, text: string, multiline?: boolean }[]>(() => {
@@ -114,12 +149,15 @@ const overlapItems = computed(() => [...props.overlaps]
   .map(item => ({
     occurrence: item,
     color: colorForOccurrence(item).fg,
-    meta: `${KIND_LABELS[item.kind] ?? ''} ${clockOf(item.start)}–${displayEndClock(item)}`,
+    meta: [
+      `${KIND_LABELS[item.kind] ?? ''} ${clockOf(item.start)}–${displayEndClock(item)}`,
+      isSuspended(item) ? STATUS_LABELS.suspended : swapNote(item),
+    ].filter(Boolean).join(' · '),
   })))
 
 const actions = computed<DetailAction[]>(() => (
   props.occurrence
-    ? detailActionsFor(props.occurrence, { hidden: props.hidden, entry: props.entry })
+    ? detailActionsFor(props.occurrence, { hidden: props.hidden, entry: props.entry, held: held.value })
     : []
 ))
 
@@ -131,17 +169,30 @@ function close() {
   popup.value?.close()
 }
 
+function openScopeSheet(key: ScopedActionKey) {
+  scopeFor.value = key
+  close()
+  scopeSheet.value?.open()
+}
+
 function onAction(key: DetailActionKey) {
   if (props.busy)
     return
+  if (key === 'hold' || key === 'unhold') {
+    // 照常上课 / 恢复按校历停课：单周条目只改这一周，跨多周或详情没拿到时先选范围
+    if (props.entry && !entrySpansWeeks(props.entry))
+      emit('action', key, 'single')
+    else
+      openScopeSheet(key)
+    return
+  }
   if (key !== 'edit') {
     emit('action', key)
     return
   }
   // 跨多周的条目先选范围；单周条目（含考试）只能改全部；详情没拿到时也按全部处理
   if (props.entry && entrySpansWeeks(props.entry)) {
-    close()
-    scopeSheet.value?.open()
+    openScopeSheet('edit')
     return
   }
   emit('edit', 'all')
@@ -153,7 +204,10 @@ function onSwitch(occurrence: Occurrence) {
 }
 
 function onScopeSelect(item: ScopeAction) {
-  emit('edit', item.scope)
+  if (scopeFor.value === 'edit')
+    emit('edit', item.scope)
+  else
+    emit('action', scopeFor.value, item.scope)
 }
 
 defineExpose({ open, close })
@@ -198,6 +252,12 @@ defineExpose({ open, close })
             </view>
           </view>
         </scroll-view>
+      </view>
+
+      <!-- 校历：本次停课 / 已设为照常上课 / 调休 -->
+      <view v-if="calendarNotice" class="mt-4 flex items-start gap-2 rounded-md bg-fill px-3 py-2 text-sm text-fg-2">
+        <text class="i-carbon-calendar mt-0.5 shrink-0 text-base text-fg-3" />
+        <text class="flex-1">{{ calendarNotice }}</text>
       </view>
 
       <view class="mt-4 text-sm text-fg-2 space-y-2">
@@ -245,7 +305,7 @@ defineExpose({ open, close })
           v-for="action in actions"
           :key="action.key"
           class="detail-action"
-          :class="action.primary ? 'btn-primary' : action.danger ? 'btn-danger' : 'btn-outline'"
+          :class="[action.primary ? 'btn-primary' : action.danger ? 'btn-danger' : 'btn-outline', { 'detail-action--wide': action.wide }]"
           :disabled="busy"
           @click="onAction(action.key)"
         >
@@ -258,7 +318,7 @@ defineExpose({ open, close })
   <!-- 编辑范围 -->
   <uv-action-sheet
     ref="scopeSheet"
-    title="修改哪些周次？"
+    :title="SCOPE_TITLES[scopeFor]"
     :actions="SCOPE_ACTIONS"
     cancel-text="取消"
     :round="16"
@@ -276,6 +336,10 @@ defineExpose({ open, close })
 .detail-action {
   flex: 1 1 40%;
   margin: 0;
+}
+
+.detail-action--wide {
+  flex-basis: 100%;
 }
 
 .overlap-switcher {
