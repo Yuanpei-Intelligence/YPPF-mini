@@ -20,6 +20,7 @@ import PageState from '@/components/PageState.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
+import { useWeekSwipe } from '@/hooks/useWeekSwipe'
 import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { toBackendURL } from '@/utils'
@@ -68,9 +69,10 @@ const AGENDA_DAYS = 7
 /** 「最新发布」里最多合并的未读通知条数 */
 const FEED_NOTIFICATION_LIMIT = 10
 
+/** 最新发布 comes first and is shown on every open; the last tab is not remembered */
 const homeTabs: { name: string, key: HomeTabKey }[] = [
-  { name: '我的日程', key: 'agenda' },
   { name: '最新发布', key: 'feed' },
+  { name: '我的日程', key: 'agenda' },
 ]
 
 const tabActiveStyle = { color: tokens.text1, fontSize: '30rpx', fontWeight: 600 }
@@ -83,10 +85,44 @@ const carouselList = ref<ICarouselItem[]>([])
 const carouselLoading = ref(true)
 
 const homeTab = ref(0)
-const currentTabKey = computed<HomeTabKey>(() => homeTabs[homeTab.value]?.key ?? 'agenda')
+const currentTabKey = computed<HomeTabKey>(() => homeTabs[homeTab.value]?.key ?? 'feed')
+
+function showHomeTab(index: number): Promise<void> {
+  homeTab.value = index
+  return Promise.resolve()
+}
+
+/*
+ * Horizontal swipes on the pane area switch tabs. The week-swipe hook is generic: its "week" is the
+ * tab index here, 1 is the tab to the right, and past either end it only rubber-bands.
+ * While it is busy (dragging or animating) taps on the panes are ignored, so a drag that ends over an
+ * item does not open it.
+ */
+const {
+  busy: paneSwipeBusy,
+  slideStyle: paneSlideStyle,
+  onTouchStart: onPaneTouchStart,
+  onTouchMove: onPaneTouchMove,
+  onTouchEnd: onPaneTouchEnd,
+  onTouchCancel: onPaneTouchCancel,
+  slide: slidePane,
+} = useWeekSwipe({
+  targetWeek: (direction) => {
+    const index = homeTab.value + direction
+    return index >= 0 && index < homeTabs.length ? index : null
+  },
+  go: showHomeTab,
+})
 
 function onHomeTabChange(params: { index: number }) {
-  homeTab.value = params.index
+  const index = params.index
+  if (index === homeTab.value)
+    return
+  // A tab tap slides the panes the way a swipe would; during a swipe animation it switches at once
+  if (paneSwipeBusy.value)
+    homeTab.value = index
+  else
+    void slidePane(index > homeTab.value ? 1 : -1, () => showHomeTab(index))
 }
 
 /* -------------------- 我的日程 -------------------- */
@@ -201,6 +237,8 @@ async function reloadAgenda() {
 }
 
 function openFilter() {
+  if (paneSwipeBusy.value)
+    return
   filterSheet.value?.open()
 }
 
@@ -224,6 +262,8 @@ async function saveFilter(patch: SettingsPatch) {
 }
 
 function openOccurrence(item: Occurrence) {
+  if (paneSwipeBusy.value)
+    return
   switch (item.kind) {
     case 'college':
     case 'activity': {
@@ -243,14 +283,20 @@ function openOccurrence(item: Occurrence) {
 }
 
 function openDay(date: string) {
+  if (paneSwipeBusy.value)
+    return
   uni.navigateTo({ url: `/pages-timetable/day?date=${encodeURIComponent(date)}` })
 }
 
 function goTimetable() {
+  if (paneSwipeBusy.value)
+    return
   uni.navigateTo({ url: '/pages/timetable/index' })
 }
 
 function goImport() {
+  if (paneSwipeBusy.value)
+    return
   uni.navigateTo({ url: '/pages-timetable/import' })
 }
 
@@ -296,11 +342,15 @@ function notificationMeta(notification: Notification): string {
 }
 
 function onActivityCardClick(id: number) {
+  if (paneSwipeBusy.value)
+    return
   uni.navigateTo({ url: `/pages/activity/detail?id=${id}` })
 }
 
 /** 打开通知中心并直接展开这一条 */
 function openNotification(id: number) {
+  if (paneSwipeBusy.value)
+    return
   uni.navigateTo({ url: `/pages/me/notifications?id=${id}` })
 }
 
@@ -439,7 +489,7 @@ onMounted(async () => {
 <template>
   <uv-toast ref="toastRef" />
   <uv-notify ref="notifyRef" />
-  <view class="yp-page">
+  <view class="yp-page flex flex-col">
     <!-- 轮播：固定 2:1 圆角图片，加载失败或没有内容时整块隐藏 -->
     <view v-if="carouselLoading || carouselList.length" class="px-4 pt-3">
       <uv-swiper
@@ -468,82 +518,93 @@ onMounted(async () => {
       />
     </view>
 
-    <!-- 我的日程：今天起 7 天 -->
-    <view v-if="currentTabKey === 'agenda'" class="px-4 pb-6">
-      <view class="mt-2 flex items-center justify-between gap-2">
-        <view v-if="settings" class="py-2 active:opacity-70" @click="openFilter">
-          <view class="h-56rpx flex items-center gap-1 border border-line rounded-full bg-card px-3 text-xs text-fg-2">
-            <view class="i-carbon-filter text-sm text-fg-3" />
-            <text>筛选</text>
-            <text v-if="filterBadge" class="rounded-full bg-primary px-1.5 text-2xs text-white leading-4">{{ filterBadge }}</text>
-          </view>
+    <!-- 内容区：左右滑动切换 tab。手势只绑在 tab 下方，轮播自己的左右滑动不会切换 -->
+    <view
+      class="home-pane-area flex-1 overflow-hidden"
+      @touchstart="onPaneTouchStart"
+      @touchmove="onPaneTouchMove"
+      @touchend="onPaneTouchEnd"
+      @touchcancel="onPaneTouchCancel"
+    >
+      <view class="home-pane" :style="paneSlideStyle">
+        <!-- 最新发布：新活动 + 未读通知 -->
+        <view v-if="currentTabKey === 'feed'" class="px-4 pb-6 pt-3">
+          <PageState
+            :loading="feedLoading && feedItems.length === 0"
+            :error="feedError"
+            :empty="feedItems.length === 0"
+            empty-icon="i-carbon-notification"
+            empty-text="还没有新内容"
+            @retry="reloadFeed"
+          >
+            <template v-for="item in feedItems" :key="item.key">
+              <ActivityCard
+                v-if="item.type === 'activity'"
+                :activity="item.activity"
+                :show-quota="true"
+                :show-time="true"
+                @click="onActivityCardClick(item.activity.id)"
+              />
+              <view
+                v-else
+                class="mb-3 flex items-start gap-3 yp-card-flat active:bg-fill"
+                @click="openNotification(item.notification.id)"
+              >
+                <view class="mt-0.5 h-64rpx w-64rpx flex shrink-0 items-center justify-center rounded-full bg-primary-light">
+                  <view class="i-carbon-notification text-lg text-primary" />
+                </view>
+                <view class="min-w-0 flex-1">
+                  <view class="flex items-center gap-2">
+                    <text class="min-w-0 flex-1 truncate text-base text-fg-1 font-medium">
+                      {{ item.notification.title_display }}
+                    </text>
+                    <StatusTag type="processing" dot text="未读" class="shrink-0" />
+                  </view>
+                  <text class="mt-1 block truncate text-sm text-fg-2">{{ notificationMeta(item.notification) }}</text>
+                  <text class="mt-1 block text-xs text-fg-3">{{ formatRelativeTime(item.notification.start_time) }}</text>
+                </view>
+              </view>
+            </template>
+          </PageState>
         </view>
-        <view v-else class="flex-1" />
-        <view class="flex shrink-0 items-center gap-0.5 py-3 text-sm text-primary active:opacity-70" @click="goTimetable">
-          <text>完整课表</text>
-          <view class="i-carbon-chevron-right text-base" />
+
+        <!-- 我的日程：今天起 7 天 -->
+        <view v-else class="px-4 pb-6">
+          <view class="mt-2 flex items-center justify-between gap-2">
+            <view v-if="settings" class="py-2 active:opacity-70" @click="openFilter">
+              <view class="h-56rpx flex items-center gap-1 border border-line rounded-full bg-card px-3 text-xs text-fg-2">
+                <view class="i-carbon-filter text-sm text-fg-3" />
+                <text>筛选</text>
+                <text v-if="filterBadge" class="rounded-full bg-primary px-1.5 text-2xs text-white leading-4">{{ filterBadge }}</text>
+              </view>
+            </view>
+            <view v-else class="flex-1" />
+            <view class="flex shrink-0 items-center gap-0.5 py-3 text-sm text-primary active:opacity-70" @click="goTimetable">
+              <text>完整课表</text>
+              <view class="i-carbon-chevron-right text-base" />
+            </view>
+          </view>
+
+          <text v-if="agendaCacheHint" class="block px-1 text-xs text-fg-3">{{ agendaCacheHint }}</text>
+          <PageState v-if="agendaError && !agenda" :error="agendaError" @retry="reloadAgenda" />
+          <AgendaList
+            v-else
+            :days="agendaDays"
+            :loading="agendaLoading"
+            :today="agendaStale ? '' : agenda?.from"
+            :empty-text="agendaEmptyText"
+            @select="openOccurrence"
+            @open-day="openDay"
+          >
+            <template #empty-action>
+              <text class="mt-1 block text-xs text-fg-3">{{ agendaEmptyHint }}</text>
+              <button class="btn-secondary mt-4 btn-sm" @click="goImport">
+                导入课表
+              </button>
+            </template>
+          </AgendaList>
         </view>
       </view>
-
-      <text v-if="agendaCacheHint" class="block px-1 text-xs text-fg-3">{{ agendaCacheHint }}</text>
-      <PageState v-if="agendaError && !agenda" :error="agendaError" @retry="reloadAgenda" />
-      <AgendaList
-        v-else
-        :days="agendaDays"
-        :loading="agendaLoading"
-        :today="agendaStale ? '' : agenda?.from"
-        :empty-text="agendaEmptyText"
-        @select="openOccurrence"
-        @open-day="openDay"
-      >
-        <template #empty-action>
-          <text class="mt-1 block text-xs text-fg-3">{{ agendaEmptyHint }}</text>
-          <button class="btn-secondary mt-4 btn-sm" @click="goImport">
-            导入课表
-          </button>
-        </template>
-      </AgendaList>
-    </view>
-
-    <!-- 最新发布：新活动 + 未读通知 -->
-    <view v-else class="px-4 pb-6 pt-3">
-      <PageState
-        :loading="feedLoading && feedItems.length === 0"
-        :error="feedError"
-        :empty="feedItems.length === 0"
-        empty-icon="i-carbon-notification"
-        empty-text="还没有新内容"
-        @retry="reloadFeed"
-      >
-        <template v-for="item in feedItems" :key="item.key">
-          <ActivityCard
-            v-if="item.type === 'activity'"
-            :activity="item.activity"
-            :show-quota="true"
-            :show-time="true"
-            @click="onActivityCardClick(item.activity.id)"
-          />
-          <view
-            v-else
-            class="mb-3 flex items-start gap-3 yp-card-flat active:bg-fill"
-            @click="openNotification(item.notification.id)"
-          >
-            <view class="mt-0.5 h-64rpx w-64rpx flex shrink-0 items-center justify-center rounded-full bg-primary-light">
-              <view class="i-carbon-notification text-lg text-primary" />
-            </view>
-            <view class="min-w-0 flex-1">
-              <view class="flex items-center gap-2">
-                <text class="min-w-0 flex-1 truncate text-base text-fg-1 font-medium">
-                  {{ item.notification.title_display }}
-                </text>
-                <StatusTag type="processing" dot text="未读" class="shrink-0" />
-              </view>
-              <text class="mt-1 block truncate text-sm text-fg-2">{{ notificationMeta(item.notification) }}</text>
-              <text class="mt-1 block text-xs text-fg-3">{{ formatRelativeTime(item.notification.start_time) }}</text>
-            </view>
-          </view>
-        </template>
-      </PageState>
     </view>
   </view>
 
