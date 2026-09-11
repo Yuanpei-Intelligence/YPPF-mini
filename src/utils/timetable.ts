@@ -167,10 +167,11 @@ export function timeToMinutes(time: string): number {
 
 /**
  * 把时刻换算成以“行”为单位的纵向位置：落在某节内按比例插值，落在课间则贴到下一节起点。
- * Times beyond the rows clamp to their edges, so a week with early or late occurrences needs weekGridRows().
+ * `time` is an ISO datetime or a bare `HH:MM`; only its clock is used. Times beyond the rows clamp to their
+ * edges, so a week with early or late times needs weekGridRows().
  */
 export function timeToRowPosition(time: string, rows: SectionRow[]): number {
-  return minutesToRowPosition(timeToMinutes(time), rows)
+  return minutesToRowPosition(timeToMinutes(clockPart(time)), rows)
 }
 
 /** timeToRowPosition for minutes since midnight (1440 = 24:00), e.g. from spanMinutes() */
