@@ -40,7 +40,9 @@ import {
   describeCourseCode,
   describeSlot,
   describeWeeks,
+  displayClock,
   effectiveOverrideAt,
+  LAST_MINUTE,
   PARITY_LABELS,
   readCatalogPick,
   ROLE_LABELS,
@@ -153,7 +155,7 @@ const categoryIndex = computed(() => Math.max(CATEGORY_OPTIONS.findIndex(item =>
 const startSectionIndex = computed(() => Math.max(rows.value.findIndex(row => row.section === form.start_section), 0))
 const endSectionIndex = computed(() => Math.max(rows.value.findIndex(row => row.section === form.end_section), 0))
 /** The time picker stops at 23:59; that end reads 24:00 */
-const endTimeLabel = computed(() => (form.end_time === '23:59' ? '24:00' : form.end_time))
+const endTimeLabel = computed(() => displayClock(form.end_time))
 
 const isExam = computed(() => form.category === 'exam')
 /** 类别 / 已选旁听 / 标签联想只在整体编辑时显示 */
@@ -290,7 +292,7 @@ function onEndTimeChange(event: PickerEvent) {
 
 /** Ends with the day: shown as 24:00, sent as 23:59 */
 function setEndOfDay() {
-  form.end_time = '23:59'
+  form.end_time = LAST_MINUTE
 }
 
 function onWeekStartChange(event: PickerEvent) {
