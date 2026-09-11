@@ -246,12 +246,27 @@ export function compareOverlapPriority(a: Occurrence, b: Occurrence): number {
     || Number(a.role === 'audit') - Number(b.role === 'audit')
 }
 
+/**
+ * How a group is drawn. `normal`: occurrences that take place. `muted`: suspended lessons that overlap only
+ * other suspended ones. `background`: suspended lessons that overlap one that takes place; they keep their own
+ * time and sit under the normal blocks, so whatever those leave uncovered stays visible.
+ */
+export type OverlapLayer = 'normal' | 'muted' | 'background'
+
 export interface OverlapGroup {
   /** Drawn at full column width */
   primary: Occurrence
   span: RowSpan
-  /** Covered by the primary, in priority order; reachable from the primary's detail sheet */
+  layer: OverlapLayer
+  /** Covered by the primary within its own layer, in priority order */
   others: Occurrence[]
+  /** Normal groups only: suspended lessons lying entirely within the block, so none of them shows */
+  covered: Occurrence[]
+  /**
+   * Offered by the detail sheet besides the primary, in priority order. Normal: its others, then every
+   * suspended lesson overlapping the block. Background: everything overlapping it. Muted: its others.
+   */
+  switcher: Occurrence[]
 }
 
 /** Blocks that only touch (one ends where the next starts) do not overlap */
@@ -261,12 +276,38 @@ export function spansOverlap(a: RowSpan, b: RowSpan): boolean {
   return a.top < b.top + b.span - OVERLAP_EPSILON && b.top < a.top + a.span - OVERLAP_EPSILON
 }
 
+/** `inner` lies entirely within `outer` */
+export function spanWithin(inner: RowSpan, outer: RowSpan): boolean {
+  return inner.top >= outer.top - OVERLAP_EPSILON && inner.top + inner.span <= outer.top + outer.span + OVERLAP_EPSILON
+}
+
+interface PlacedItem {
+  item: Occurrence
+  span: RowSpan
+}
+
+/** Visit in priority order: an item overlapping a placed primary joins the first such group, otherwise it starts one */
+function groupInPriorityOrder(placed: PlacedItem[], layerOf: (primary: PlacedItem) => OverlapLayer): OverlapGroup[] {
+  const groups: OverlapGroup[] = []
+  for (const entry of placed) {
+    const host = groups.find(group => spansOverlap(group.span, entry.span))
+    if (host)
+      host.others.push(entry.item)
+    else
+      groups.push({ primary: entry.item, span: entry.span, layer: layerOf(entry), others: [], covered: [], switcher: [] })
+  }
+  return groups
+}
+
 /**
- * Collapse occurrences that overlap on the grid into one block per group. Within each day the
- * occurrences are visited in priority order: one that overlaps an already placed block joins the
- * first such block (the one with the highest priority), otherwise it becomes a block of its own.
+ * Collapse occurrences that overlap on the grid into one block per group, day by day. Occurrences that take
+ * place are grouped among themselves in priority order: one that overlaps an already placed block joins the
+ * first such block (the one with the highest priority), otherwise it becomes a block of its own. Suspended
+ * lessons are grouped the same way among themselves and never join a normal block: a suspended group whose
+ * primary overlaps an occurrence that takes place is a background block, drawn under the normal blocks at its
+ * own time. A normal block's +N also counts the suspended lessons it covers entirely, which would show nowhere.
  * Overlap is judged on grid rows, so items that share a row without sharing minutes still collapse.
- * Suspended lessons are visited last, so they never cover one that takes place; they still count in +N.
+ * Per day the background groups come first, then the normal ones, then the muted ones (the drawing order).
  */
 export function resolveOverlaps(items: Occurrence[], spanOf: (item: Occurrence) => RowSpan): OverlapGroup[] {
   const byDate = new Map<string, Occurrence[]>()
@@ -279,18 +320,59 @@ export function resolveOverlaps(items: Occurrence[], spanOf: (item: Occurrence) 
   }
   const groups: OverlapGroup[] = []
   for (const dayItems of Array.from(byDate.values())) {
-    const dayGroups: OverlapGroup[] = []
-    for (const item of [...dayItems].sort(compareOverlapPriority)) {
-      const span = spanOf(item)
-      const host = dayGroups.find(group => spansOverlap(group.span, span))
-      if (host)
-        host.others.push(item)
-      else
-        dayGroups.push({ primary: item, span, others: [] })
+    const placed = [...dayItems].sort(compareOverlapPriority).map(item => ({ item, span: spanOf(item) }))
+    const normal = placed.filter(entry => !isSuspended(entry.item))
+    const suspended = placed.filter(entry => isSuspended(entry.item))
+    const normalGroups = groupInPriorityOrder(normal, () => 'normal')
+    for (const group of normalGroups) {
+      const under = suspended.filter(entry => spansOverlap(entry.span, group.span))
+      group.covered = under.filter(entry => spanWithin(entry.span, group.span)).map(entry => entry.item)
+      group.switcher = [...group.others, ...under.map(entry => entry.item)]
     }
-    groups.push(...dayGroups)
+    const suspendedGroups = groupInPriorityOrder(suspended, primary =>
+      normal.some(entry => spansOverlap(entry.span, primary.span)) ? 'background' : 'muted')
+    for (const group of suspendedGroups) {
+      group.switcher = group.layer === 'background'
+        ? placed.filter(entry => entry.item !== group.primary && spansOverlap(entry.span, group.span)).map(entry => entry.item)
+        : [...group.others]
+    }
+    groups.push(
+      ...suspendedGroups.filter(group => group.layer === 'background'),
+      ...normalGroups,
+      ...suspendedGroups.filter(group => group.layer === 'muted'),
+    )
   }
   return groups
+}
+
+/** Stacking of grid blocks: background suspended lessons under the rest, whose opaque fill hides what it covers */
+export const BLOCK_Z_INDEX: Record<OverlapLayer, number> = {
+  background: 1,
+  muted: 2,
+  normal: 2,
+}
+
+export interface OverlapBlockModel {
+  zIndex: number
+  /** Suspended: stripes, fg-3 text and the 停 marker */
+  muted: boolean
+  /** Drawn under the normal blocks it overlaps */
+  background: boolean
+  /** The +N chip; 0 for none */
+  more: number
+  /** The primary, then the detail sheet's switcher */
+  detailGroup: Occurrence[]
+}
+
+/** What the week grid needs of a group besides its position and text */
+export function overlapBlockModel(group: OverlapGroup): OverlapBlockModel {
+  return {
+    zIndex: BLOCK_Z_INDEX[group.layer],
+    muted: group.layer !== 'normal',
+    background: group.layer === 'background',
+    more: group.others.length + group.covered.length,
+    detailGroup: [group.primary, ...group.switcher],
+  }
 }
 
 /* -------------------- Block text -------------------- */
