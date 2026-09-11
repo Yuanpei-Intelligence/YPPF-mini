@@ -332,6 +332,101 @@ export function weekSuspendedReason(view: WeekView | null | undefined): string {
   return reasons.join(' · ')
 }
 
+/*
+ * Week grid: a short tag under each day header, the full labels in one strip above the grid.
+ * The day view has room for the full label and keeps using calendarLabelClass directly.
+ */
+
+/** Keywords that turn an event name into a day-header tag of at most two characters, checked in order */
+const CALENDAR_SHORT_KEYWORDS: [keyword: string, short: string][] = [
+  ['公休', '公休'],
+  ['调休', '调休'],
+  ['补课', '补课'],
+  ['考试', '考试'],
+  ['放假', '放假'],
+  ['停课', '停课'],
+]
+
+/** Tag when the name has no keyword; a plain info event gets a dot instead of text */
+const CALENDAR_SHORT_FALLBACKS: Record<CalendarKind, string> = {
+  holiday: '放假',
+  exam: '考试',
+  swap: '调休',
+  info: '',
+}
+
+/**
+ * Day-header tag for a calendar event: a keyword found in its name (中秋节放假 → 放假,
+ * 公休，课程照常进行 → 公休), else the kind's generic word; '' for an info event without a keyword
+ */
+export function calendarShortLabel(kind: CalendarKind | null | undefined, label: string | null | undefined): string {
+  if (!kind)
+    return ''
+  const name = label ?? ''
+  const match = CALENDAR_SHORT_KEYWORDS.find(([keyword]) => name.includes(keyword))
+  return match ? match[1] : CALENDAR_SHORT_FALLBACKS[kind] ?? ''
+}
+
+const CALENDAR_DOT_CLASSES: Record<CalendarKind, string> = {
+  holiday: 'bg-error',
+  exam: 'bg-error',
+  swap: 'bg-primary',
+  info: 'bg-fg-3',
+}
+
+/** Dot colour for a day whose event has no short tag (same hues as calendarLabelClass) */
+export function calendarDotClass(kind: CalendarKind | null | undefined): string {
+  return kind ? CALENDAR_DOT_CLASSES[kind] ?? '' : ''
+}
+
+/** `9/25`; `9/26–27` within a month; `9/30–10/1` across months */
+export function shortDateRange(start: string, end: string): string {
+  if (start === end)
+    return shortDate(start)
+  const [, startMonth] = start.split('-')
+  const [, endMonth, endDay] = end.split('-')
+  return startMonth === endMonth && endDay
+    ? `${shortDate(start)}–${Number(endDay)}`
+    : `${shortDate(start)}–${shortDate(end)}`
+}
+
+export interface WeekCalendarNote {
+  start: string
+  end: string
+  /** `9/25` / `9/26–27` */
+  range: string
+  label: string
+  kind: CalendarKind
+  labelClass: string
+}
+
+/**
+ * The week's calendar labels for the strip above the grid, with consecutive days of the same event
+ * merged: `9/25 中秋节放假`, `9/26–27 公休，课程照常进行`. Empty when no day of the week has a label.
+ */
+export function weekCalendarNotes(view: WeekView | null | undefined): WeekCalendarNote[] {
+  const notes: WeekCalendarNote[] = []
+  const dates = view?.week_dates ?? []
+  for (let index = 0; index < dates.length; index++) {
+    const iso = dates[index]
+    const info = dayInfo(view, index)
+    if (!info?.kind)
+      continue
+    const kind = info.kind
+    const label = info.label || (suspendsClasses(kind) ? SUSPENDED_LABELS[kind] : '')
+    if (!label)
+      continue
+    const last = notes[notes.length - 1]
+    if (last && last.kind === kind && last.label === label && addDays(last.end, 1) === iso) {
+      last.end = iso
+      last.range = shortDateRange(last.start, iso)
+      continue
+    }
+    notes.push({ start: iso, end: iso, range: shortDate(iso), label, kind, labelClass: calendarLabelClass(kind) })
+  }
+  return notes
+}
+
 /* -------------------- 日期与学期定位 -------------------- */
 
 const DAY_MS = 86_400_000
@@ -757,8 +852,10 @@ export interface ReminderCache {
   checked_at: number
 }
 
-/** Device preference shared by every account on this phone */
+/** Device preferences shared by every account on this phone */
 const SHOW_HIDDEN_KEY = 'timetable_show_hidden'
+const WEEKEND_MODE_KEY = 'timetable_weekend_mode'
+const SWIPE_HINT_SEEN_KEY = 'timetable_swipe_hint_seen'
 
 function readStorage<T>(key: string): T | null {
   try {
@@ -826,6 +923,29 @@ export function readShowHidden(): boolean {
 
 export function saveShowHidden(value: boolean) {
   writeStorage(SHOW_HIDDEN_KEY, value)
+}
+
+/**
+ * Weekend columns of the week grid. They show by default; `hide` is only ever the user's own choice
+ * (「隐藏周末」 in the timetable settings) and is never inferred from the week's data.
+ */
+export type WeekendMode = 'show' | 'hide'
+
+export function readWeekendMode(): WeekendMode {
+  return readStorage<string>(WEEKEND_MODE_KEY) === 'hide' ? 'hide' : 'show'
+}
+
+export function saveWeekendMode(mode: WeekendMode) {
+  writeStorage(WEEKEND_MODE_KEY, mode)
+}
+
+/** The one-time "swipe to change weeks" hint has been shown on this phone */
+export function readSwipeHintSeen(): boolean {
+  return readStorage<boolean>(SWIPE_HINT_SEEN_KEY) === true
+}
+
+export function markSwipeHintSeen() {
+  writeStorage(SWIPE_HINT_SEEN_KEY, true)
 }
 
 export function readReminderCache(account: string): ReminderCache | null {
