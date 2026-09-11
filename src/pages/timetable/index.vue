@@ -41,6 +41,7 @@ import {
   weekSuspendedReason,
 } from '@/utils/timetable'
 import {
+  bandBoundaries,
   BLOCK_EDGE,
   BLOCK_GAP,
   BLOCK_MARKER_SIZE,
@@ -61,6 +62,9 @@ import {
   resolveOverlaps,
   rowOffset,
   TITLE_LINE,
+  ZONE_LABEL_HEIGHT,
+  ZONE_LABELS,
+  zoneBoundaries,
 } from '@/utils/timetable-grid'
 
 definePage({
@@ -254,13 +258,19 @@ const hiddenWeekendCount = computed(() =>
 const gridOccurrences = computed(() => visibleOccurrences.value.filter(item => item.weekday <= columnCount.value))
 /** The section table, plus clock rows when this week has occurrences before the first or after the last section */
 const rows = computed(() => weekGridRows(term.value, gridOccurrences.value))
-/** Rows with a thin band above them (lunch, dinner) */
-const breaks = computed(() => breakBoundaries(rows.value))
+/** Rows with a thin band above them: lunch and dinner, and where 早间 / 晚间 clock rows meet the section table */
+const breaks = computed(() => bandBoundaries(rows.value))
 const metrics = computed<GridMetrics>(() => ({ rowHeight: rowHeight.value, breaks: breaks.value }))
 const gridHeight = computed(() => gridBodyHeight(rows.value.length, metrics.value))
 const breakBands = computed(() => breaks.value.map(boundary => ({
   key: `break-${boundary}`,
   style: `top: ${rowOffset(boundary, metrics.value) - BREAK_HEIGHT}rpx; height: ${BREAK_HEIGHT}rpx`,
+})))
+/** 早间 / 晚间 on the zone bands, centred on the band in the section axis */
+const zoneLabels = computed(() => zoneBoundaries(rows.value).map(boundary => ({
+  key: `zone-${boundary.zone}`,
+  label: ZONE_LABELS[boundary.zone],
+  style: `top: ${rowOffset(boundary.index, metrics.value) - BREAK_HEIGHT - (ZONE_LABEL_HEIGHT - BREAK_HEIGHT) / 2}rpx; height: ${ZONE_LABEL_HEIGHT}rpx`,
 })))
 
 /** Axis cell of a row; a row after a break carries the band as its top border */
@@ -846,18 +856,22 @@ onShareAppMessage(() => ({
           </view>
 
           <view class="flex">
-            <view class="shrink-0" :style="{ width: `${GRID_AXIS_WIDTH}rpx` }">
+            <view class="relative shrink-0" :style="{ width: `${GRID_AXIS_WIDTH}rpx` }">
               <view
                 v-for="(row, rowIndex) in rows"
                 :key="`axis-${row.section}-${row.start}`"
                 class="box-border flex flex-col items-center justify-center border-b border-line-light"
                 :style="axisCellStyle(rowIndex)"
               >
-                <!-- 节次表以外的时段（早于第 1 节、晚于第 12 节）只标起止时刻 -->
-                <text v-if="row.section" class="grid-axis__section">{{ row.section }}</text>
-                <text class="grid-axis__time" :class="{ 'grid-axis__time--clock': !row.section }">{{ row.start }}</text>
-                <text v-if="showEndTimes || !row.section" class="grid-axis__time" :class="{ 'grid-axis__time--clock': !row.section }">{{ row.end }}</text>
+                <!-- 节次表以外的时刻行：编号位留空，只写开始时间，样式与位置同节次时间；结束时间占位但不显示 -->
+                <view class="grid-axis__number">
+                  <text v-if="row.section" class="grid-axis__section">{{ row.section }}</text>
+                </view>
+                <text class="grid-axis__time">{{ row.start }}</text>
+                <text v-if="showEndTimes" class="grid-axis__time" :class="{ 'grid-axis__time--hidden': !row.section }">{{ row.end }}</text>
               </view>
+              <!-- 时刻行与节次表相接处的分隔带上标「早间 / 晚间」，与课间休息的带区分开 -->
+              <text v-for="zone in zoneLabels" :key="zone.key" class="grid-zone-label" :style="zone.style">{{ zone.label }}</text>
             </view>
 
             <view class="relative flex-1" :style="{ height: `${gridHeight}rpx` }">
@@ -1135,6 +1149,14 @@ onShareAppMessage(() => ({
 }
 
 /* The section axis stays narrow so the seven day columns keep their width */
+/* Same height with or without a number, so a clock row's start time sits where a section's does */
+.grid-axis__number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28rpx;
+}
+
 .grid-axis__section {
   font-size: 24rpx;
   font-weight: 500;
@@ -1148,9 +1170,21 @@ onShareAppMessage(() => ({
   color: var(--yp-text-3);
 }
 
-.grid-axis__time--clock {
-  font-weight: 500;
-  color: var(--yp-text-2);
+/* Clock rows keep the end-time line for alignment but never show it */
+.grid-axis__time--hidden {
+  visibility: hidden;
+}
+
+.grid-zone-label {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  font-size: 18rpx;
+  line-height: 20rpx;
+  color: var(--yp-text-3);
+  text-align: center;
+  background: var(--yp-bg-fill);
 }
 
 .grid-break {
