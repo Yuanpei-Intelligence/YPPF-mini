@@ -295,6 +295,15 @@ function setEndOfDay() {
   form.end_time = LAST_MINUTE
 }
 
+/** The form's initial time: 按节次, sections 1–2 (08:00–09:50 as clock times) */
+function resetTimeFields() {
+  form.time_mode = 'section'
+  form.start_section = 1
+  form.end_section = 2
+  form.start_time = '08:00'
+  form.end_time = '09:50'
+}
+
 function onWeekStartChange(event: PickerEvent) {
   form.week_start = pickerIndex(event) + 1
   if (form.week_end < form.week_start)
@@ -408,6 +417,10 @@ function applyCatalogEntry(entry: CatalogEntry, slot: CatalogSlot | null) {
       form.time_mode = 'section'
       form.start_section = slot.start_section
       form.end_section = slot.end_section
+    }
+    else {
+      // No sections on this slot: start from the defaults rather than the previously picked slot's time
+      resetTimeFields()
     }
     if (slot.week_start && slot.week_end && slot.week_end >= slot.week_start) {
       form.week_start = Math.min(slot.week_start, totalWeeks.value)
