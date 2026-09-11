@@ -46,6 +46,7 @@ import {
   ROLE_LABELS,
   sectionRows,
   teachingWeeksOf,
+  timeToMinutes,
   weekDatesOf,
   WEEKDAY_LABELS,
 } from '@/utils/timetable'
@@ -68,8 +69,16 @@ interface PickerEvent { detail: { value: number | string } }
 const CATEGORY_OPTIONS = (['course', 'exam', 'other'] as EntryCategory[]).map(value => ({ value, label: CATEGORY_LABELS[value] }))
 const ROLE_OPTIONS = (['enrolled', 'audit'] as EntryRole[]).map(value => ({ value, label: ROLE_LABELS[value] }))
 /** 单次 / 分段调整可改的表单字段（其余字段只能在 scope=all 下改） */
-const OVERRIDE_FIELDS = ['name', 'teacher', 'room', 'weekday', 'start_section', 'end_section', 'note', 'tag'] as const
+const OVERRIDE_FIELDS = ['name', 'teacher', 'room', 'weekday', 'start_section', 'end_section', 'start_time', 'end_time', 'note', 'tag'] as const
 type OverrideField = typeof OVERRIDE_FIELDS[number]
+
+/** 按节次, or 按时间: any clock time, sent with start_section / end_section 0 */
+type TimeMode = 'section' | 'clock'
+
+const TIME_MODE_OPTIONS: { value: TimeMode, label: string }[] = [
+  { value: 'section', label: '按节次' },
+  { value: 'clock', label: '按时间' },
+]
 
 const entryId = ref<number | null>(null)
 const requestedTerm = ref('')
@@ -112,6 +121,10 @@ const form = reactive({
   weekday: 1,
   start_section: 1,
   end_section: 2,
+  time_mode: 'section' as TimeMode,
+  /** `HH:MM`; used by 按时间 */
+  start_time: '08:00',
+  end_time: '09:50',
   week_start: 1,
   week_end: 16,
   parity: 0 as Parity,
@@ -139,6 +152,8 @@ const categoryIndex = computed(() => Math.max(CATEGORY_OPTIONS.findIndex(item =>
 
 const startSectionIndex = computed(() => Math.max(rows.value.findIndex(row => row.section === form.start_section), 0))
 const endSectionIndex = computed(() => Math.max(rows.value.findIndex(row => row.section === form.end_section), 0))
+/** The time picker stops at 23:59; that end reads 24:00 */
+const endTimeLabel = computed(() => (form.end_time === '23:59' ? '24:00' : form.end_time))
 
 const isExam = computed(() => form.category === 'exam')
 /** 类别 / 已选旁听 / 标签联想只在整体编辑时显示 */
@@ -196,6 +211,8 @@ const FORM_FIELDS = [
   'weekday',
   'start_section',
   'end_section',
+  'start_time',
+  'end_time',
   'week_start',
   'week_end',
   'parity',
@@ -220,6 +237,11 @@ function pickerIndex(event: PickerEvent) {
   return Number(event.detail.value)
 }
 
+/** `HH:MM[:SS]` → `HH:MM`; empty stays empty */
+function hhmm(value: string | null | undefined): string {
+  return value ? value.slice(0, 5) : ''
+}
+
 function onWeekdayChange(event: PickerEvent) {
   form.weekday = pickerIndex(event) + 1
 }
@@ -240,6 +262,35 @@ function onEndSectionChange(event: PickerEvent) {
   form.end_section = row.section
   if (form.start_section > row.section)
     form.start_section = row.section
+}
+
+/** Switching to 按时间 starts from the clock times of the chosen sections */
+function setTimeMode(mode: TimeMode) {
+  if (form.time_mode === mode)
+    return
+  if (mode === 'clock') {
+    const times = sectionTimes()
+    if (times.start_time)
+      form.start_time = times.start_time
+    if (times.end_time)
+      form.end_time = times.end_time
+  }
+  form.time_mode = mode
+  clearFieldError('start_time')
+  clearFieldError('end_time')
+}
+
+function onStartTimeChange(event: PickerEvent) {
+  form.start_time = String(event.detail.value)
+}
+
+function onEndTimeChange(event: PickerEvent) {
+  form.end_time = String(event.detail.value)
+}
+
+/** Ends with the day: shown as 24:00, sent as 23:59 */
+function setEndOfDay() {
+  form.end_time = '23:59'
 }
 
 function onWeekStartChange(event: PickerEvent) {
@@ -352,6 +403,7 @@ function applyCatalogEntry(entry: CatalogEntry, slot: CatalogSlot | null) {
     if (slot.weekday && slot.weekday >= 1 && slot.weekday <= 7)
       form.weekday = slot.weekday
     if (slot.start_section && slot.end_section && slot.end_section >= slot.start_section) {
+      form.time_mode = 'section'
       form.start_section = slot.start_section
       form.end_section = slot.end_section
     }
@@ -439,6 +491,10 @@ function fillFrom(entry: Entry) {
   form.weekday = entry.weekday
   form.start_section = entry.start_section > 0 ? entry.start_section : 1
   form.end_section = entry.end_section > 0 ? entry.end_section : form.start_section
+  // Section 0 means the entry is kept by clock time: open it 按时间
+  form.time_mode = entry.start_section > 0 ? 'section' : 'clock'
+  form.start_time = hhmm(entry.start_time) || '08:00'
+  form.end_time = hhmm(entry.end_time) || '09:50'
   form.week_start = entry.week_start
   form.week_end = entry.week_end
   form.parity = entry.parity
@@ -464,10 +520,17 @@ function fillScoped(entry: Entry, week: number) {
     form.room = fields.room
   if (fields.weekday !== undefined)
     form.weekday = fields.weekday
-  if (fields.start_section !== undefined)
-    form.start_section = fields.start_section
-  if (fields.end_section !== undefined)
+  if (fields.start_section !== undefined) {
+    form.time_mode = fields.start_section > 0 ? 'section' : 'clock'
+    if (fields.start_section > 0)
+      form.start_section = fields.start_section
+  }
+  if (fields.end_section !== undefined && fields.end_section > 0)
     form.end_section = fields.end_section
+  if (fields.start_time !== undefined)
+    form.start_time = hhmm(fields.start_time)
+  if (fields.end_time !== undefined)
+    form.end_time = hhmm(fields.end_time)
   if (fields.note !== undefined)
     form.note = fields.note
   if (fields.tag !== undefined)
@@ -482,8 +545,7 @@ function snapshotOverrideFields(): Record<OverrideField, string | number> {
     teacher: form.teacher.trim(),
     room: form.room.trim(),
     weekday: form.weekday,
-    start_section: form.start_section,
-    end_section: form.end_section,
+    ...timeFields(),
     note: form.note.trim(),
     tag: form.tag.trim(),
   }
@@ -578,7 +640,13 @@ function validate(): boolean {
     setFieldError('name', '请填写名称', 'required')
     return false
   }
-  if (form.end_section < form.start_section) {
+  if (form.time_mode === 'clock') {
+    if (timeToMinutes(form.end_time) <= timeToMinutes(form.start_time)) {
+      setFieldError('end_time', '跨过午夜请拆成两条')
+      return false
+    }
+  }
+  else if (form.end_section < form.start_section) {
     setFieldError('end_section', '结束节次不能早于开始节次')
     return false
   }
@@ -595,6 +663,13 @@ function sectionTimes() {
   return { start_time: startRow?.start ?? '', end_time: endRow?.end ?? '' }
 }
 
+/** Time fields for the backend: sections with their clock times, or 按时间 with sections 0 */
+function timeFields() {
+  if (form.time_mode === 'clock')
+    return { start_section: 0, end_section: 0, start_time: form.start_time, end_time: form.end_time }
+  return { start_section: form.start_section, end_section: form.end_section, ...sectionTimes() }
+}
+
 function buildPayload(): EntryIn {
   const payload: EntryIn = {
     name: form.name.trim(),
@@ -603,9 +678,7 @@ function buildPayload(): EntryIn {
     teacher: form.teacher.trim(),
     room: form.room.trim(),
     weekday: form.weekday,
-    start_section: form.start_section,
-    end_section: form.end_section,
-    ...sectionTimes(),
+    ...timeFields(),
     week_start: form.week_start,
     // 考试只有一周
     week_end: isExam.value ? form.week_start : form.week_end,
@@ -667,8 +740,11 @@ function buildScopedPatch(): EntryPatch | null {
       (changed as Record<string, string | number>)[field] = current[field]
   }
   Object.assign(patch, changed)
-  if (changed.start_section !== undefined || changed.end_section !== undefined)
-    Object.assign(patch, sectionTimes())
+  // Sections and clock times travel together, so an adjustment never pairs new sections with old times
+  const timeChanged = changed.start_section !== undefined || changed.end_section !== undefined
+    || changed.start_time !== undefined || changed.end_time !== undefined
+  if (timeChanged)
+    Object.assign(patch, timeFields())
   if (isSingle.value && snapshot.canceled)
     patch.canceled = false
   return Object.keys(patch).length ? patch : null
@@ -914,31 +990,78 @@ onLoad((options) => {
             <ApiFieldError :messages="getFieldMessages('weekday')" />
           </view>
 
-          <view class="flex gap-3">
-            <view class="flex-1">
-              <text class="mb-2 block text-sm text-fg-2 font-medium">开始节次</text>
-              <picker :value="startSectionIndex" :range="sectionOptions" @change="onStartSectionChange">
-                <view class="form-picker">
-                  <text class="truncate">第{{ form.start_section }}节</text>
-                  <text class="i-carbon-chevron-down text-fg-3" />
-                </view>
-              </picker>
-              <ApiFieldError :messages="getFieldMessages('start_section')" />
-            </view>
-            <view class="flex-1">
-              <text class="mb-2 block text-sm text-fg-2 font-medium">结束节次</text>
-              <picker :value="endSectionIndex" :range="sectionOptions" @change="onEndSectionChange">
-                <view class="form-picker">
-                  <text class="truncate">第{{ form.end_section }}节</text>
-                  <text class="i-carbon-chevron-down text-fg-3" />
-                </view>
-              </picker>
-              <ApiFieldError :messages="getFieldMessages('end_section')" />
+          <view class="flex items-center justify-between">
+            <text class="text-sm text-fg-2 font-medium">时间</text>
+            <view class="time-mode">
+              <view
+                v-for="option in TIME_MODE_OPTIONS"
+                :key="option.value"
+                class="time-mode__item"
+                :class="{ 'time-mode__item--active': form.time_mode === option.value }"
+                @click="setTimeMode(option.value)"
+              >
+                {{ option.label }}
+              </view>
             </view>
           </view>
-          <text class="block text-xs text-fg-3">
-            {{ rows[startSectionIndex]?.start }} – {{ rows[endSectionIndex]?.end }}
-          </text>
+
+          <template v-if="form.time_mode === 'section'">
+            <view class="flex gap-3">
+              <view class="flex-1">
+                <text class="mb-2 block text-sm text-fg-2 font-medium">开始节次</text>
+                <picker :value="startSectionIndex" :range="sectionOptions" @change="onStartSectionChange">
+                  <view class="form-picker">
+                    <text class="truncate">第{{ form.start_section }}节</text>
+                    <text class="i-carbon-chevron-down text-fg-3" />
+                  </view>
+                </picker>
+                <ApiFieldError :messages="getFieldMessages('start_section')" />
+              </view>
+              <view class="flex-1">
+                <text class="mb-2 block text-sm text-fg-2 font-medium">结束节次</text>
+                <picker :value="endSectionIndex" :range="sectionOptions" @change="onEndSectionChange">
+                  <view class="form-picker">
+                    <text class="truncate">第{{ form.end_section }}节</text>
+                    <text class="i-carbon-chevron-down text-fg-3" />
+                  </view>
+                </picker>
+                <ApiFieldError :messages="getFieldMessages('end_section')" />
+              </view>
+            </view>
+            <text class="block text-xs text-fg-3">
+              {{ rows[startSectionIndex]?.start }} – {{ rows[endSectionIndex]?.end }}
+            </text>
+          </template>
+          <template v-else>
+            <view class="flex gap-3">
+              <view class="flex-1">
+                <text class="mb-2 block text-sm text-fg-2 font-medium">开始时间</text>
+                <picker mode="time" :value="form.start_time" start="00:00" end="23:59" @change="onStartTimeChange">
+                  <view class="form-picker">
+                    <text>{{ form.start_time }}</text>
+                    <text class="i-carbon-time text-fg-3" />
+                  </view>
+                </picker>
+                <ApiFieldError :messages="getFieldMessages('start_time')" />
+              </view>
+              <view class="flex-1">
+                <text class="mb-2 block text-sm text-fg-2 font-medium">结束时间</text>
+                <picker mode="time" :value="form.end_time" start="00:00" end="23:59" @change="onEndTimeChange">
+                  <view class="form-picker">
+                    <text>{{ endTimeLabel }}</text>
+                    <text class="i-carbon-time text-fg-3" />
+                  </view>
+                </picker>
+                <ApiFieldError :messages="getFieldMessages('end_time')" />
+              </view>
+            </view>
+            <view class="flex items-center justify-between gap-2">
+              <text class="min-w-0 flex-1 text-xs text-fg-3">任意时刻，最晚到 24:00；跨过午夜请拆成两条</text>
+              <view class="btn-text shrink-0" @click="setEndOfDay">
+                结束于 24:00
+              </view>
+            </view>
+          </template>
 
           <view v-if="showWeekRange" class="flex gap-3">
             <view class="flex-1">
@@ -1096,5 +1219,30 @@ onLoad((options) => {
   min-height: 120rpx;
   padding: 16rpx 24rpx;
   line-height: 1.5;
+}
+
+.time-mode {
+  display: flex;
+  padding: 4rpx;
+  background: var(--yp-bg-fill);
+  border-radius: 999rpx;
+}
+
+/* 34rpx text + 23rpx above and below + the 4rpx track = 88rpx tap target */
+.time-mode__item {
+  min-width: 112rpx;
+  padding: 23rpx 24rpx;
+  font-size: 24rpx;
+  line-height: 34rpx;
+  color: var(--yp-text-2);
+  text-align: center;
+  border-radius: 999rpx;
+}
+
+.time-mode__item--active {
+  font-weight: 500;
+  color: var(--yp-color-primary);
+  background: var(--yp-bg-card);
+  box-shadow: var(--yp-shadow-card);
 }
 </style>
