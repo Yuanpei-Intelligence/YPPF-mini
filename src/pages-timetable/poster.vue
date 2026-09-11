@@ -15,7 +15,7 @@ import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { debounce } from '@/utils/debounce'
 import { confirmModal } from '@/utils/dialog'
-import { hasWeekendSlots, layoutCalendarNotes, layoutExamList, layoutPosterGrid, posterDayColumns } from '@/utils/poster-overview'
+import { hasWeekendSlots, isSuspendedSlot, layoutCalendarNotes, layoutExamList, layoutPosterGrid, posterDayColumns } from '@/utils/poster-overview'
 import {
   blockColorFor,
   DEFAULT_POSTER_MODE,
@@ -144,7 +144,7 @@ interface GridLayoutOptions {
   hideWeekend: boolean
 }
 
-type PosterOptionKey = 'qr' | 'name' | 'teacher' | 'weekend'
+type PosterOptionKey = 'name' | 'teacher' | 'weekend'
 
 /** 海报选项胶囊：selected 表示画进海报 */
 interface PosterOption {
@@ -170,6 +170,11 @@ const FOOTER_H = 46
 const FOOTER_QR_H = 92
 const QR_TILE = 56
 const QR_GAP = 10
+/** 格子左侧色条的宽度；停课的课细一些 */
+const BLOCK_BAR_W = 3
+const SUSPENDED_BAR_W = 2
+/** 停课的课的格子底色：风格的淡色字颜色加这个透明度，叠在卡片或停课列的底色上 */
+const SUSPENDED_FILL_ALPHA = 0.14
 /** DPR 上限；再乘以画布尺寸不能超过微信 canvas 的长边上限 */
 const MAX_DPR = 3
 const MAX_CANVAS_SIDE = 4096
@@ -233,10 +238,9 @@ const themeKey = ref<PosterThemeKey>(readPosterTheme() ?? DEFAULT_POSTER_THEME)
 const mode = ref<PosterMode>(readPosterMode() ?? DEFAULT_POSTER_MODE)
 /** 后端还没有整学期接口：退回本周海报，并提示一句 */
 const overviewUnsupported = ref(false)
-const withQr = ref(false)
 /** 只作用于本页海报，不回写课表设置里的 share_show_name */
 const showName = ref(false)
-/** 整学期海报是否写上教师；只作用于本页，默认不写 */
+/** 海报是否写上教师（课程与书院课），两种海报都提供；只作用于本页，默认不写 */
 const showTeacher = ref(false)
 /** 隐藏周六、周日两列：只在这份海报周末没有日程时可选（canHideWeekend），默认跟课表页的「隐藏周末」设置 */
 const hideWeekend = ref(readWeekendMode() === 'hide')
@@ -261,7 +265,6 @@ const theme = computed(() => POSTER_THEMES[themeKey.value])
 /** 实际画的内容：不支持整学期时退回本周 */
 const effectiveMode = computed<PosterMode>(() => (overviewUnsupported.value ? 'week' : mode.value))
 const activeTerm = computed(() => (effectiveMode.value === 'term' ? overview.value?.term : view.value?.term) ?? null)
-const hasAssets = computed(() => !!(assets.value?.miniapp_qrcode || assets.value?.official_qrcode))
 const displayName = computed(() => (showName.value ? userStore.userInfo.name || '' : ''))
 const title = computed(() => (displayName.value ? `${displayName.value}的课表` : '我的课表'))
 const subtitle = computed(() => {
@@ -291,14 +294,12 @@ const visibleOccurrences = computed(() => {
 const canHideWeekend = computed(() => (effectiveMode.value === 'term'
   ? !!overview.value && !hasWeekendSlots(overview.value.slots)
   : !!view.value && !hasWeekendSlots(visibleOccurrences.value)))
-/** 选项胶囊，选中即画进海报：二维码（有分享素材时）、姓名、教师（整学期）、周末（周六、周日没有日程时才可去掉） */
+/** 选项胶囊，选中即画进海报：姓名、教师、周末（周六、周日没有日程时才可去掉）。二维码有分享素材就画，不设选项 */
 const optionChips = computed<PosterOption[]>(() => {
-  const chips: PosterOption[] = []
-  if (hasAssets.value)
-    chips.push({ key: 'qr', label: '二维码', selected: withQr.value })
-  chips.push({ key: 'name', label: '姓名', selected: showName.value })
-  if (effectiveMode.value === 'term')
-    chips.push({ key: 'teacher', label: '教师', selected: showTeacher.value })
+  const chips: PosterOption[] = [
+    { key: 'name', label: '姓名', selected: showName.value },
+    { key: 'teacher', label: '教师', selected: showTeacher.value },
+  ]
   if (canHideWeekend.value)
     chips.push({ key: 'weekend', label: '周末', selected: !hideWeekend.value })
   return chips
@@ -531,10 +532,10 @@ function loadImage(canvas: Canvas2D, url: string): Promise<CanvasImageSource | n
 
 const QR_PENDING = Symbol('qr-pending')
 
-/** 已加载的二维码；最多等 QR_WAIT_MS，没到的先不画，加载完成后触发一次重绘补上 */
+/** 已加载的二维码，有分享素材就画；最多等 QR_WAIT_MS，没到的先不画，加载完成后触发一次重绘补上 */
 async function loadQrTiles(canvas: Canvas2D): Promise<QrTile[]> {
   const current = assets.value
-  if (!withQr.value || !current)
+  if (!current)
     return []
   const sources = [
     { caption: '小程序', url: current.miniapp_qrcode },
@@ -546,7 +547,7 @@ async function loadQrTiles(canvas: Canvas2D): Promise<QrTile[]> {
   images.forEach((image, index) => {
     if (image === QR_PENDING) {
       void pending[index].then((loaded) => {
-        if (loaded && withQr.value)
+        if (loaded)
           scheduleRender()
       })
     }
@@ -1029,7 +1030,10 @@ function drawBlocks(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: G
   }
 }
 
-/** 一块格子：底色、色条、逐行文字（名称 / 地点 / 周次与时间 / 教师）与小标；已取消的日程整块淡一些 */
+/**
+ * 一块格子：底色、色条、逐行文字（名称 / 地点 / 周次与时间 / 教师）与小标。已取消的日程整块淡一些；
+ * 停课的课（放假 / 停课复习考试日照常返回的课）用风格的淡色：中性底、淡色字、细一些的色条，文字照样写全
+ */
 function drawPart(ctx: CanvasRenderingContext2D, part: PosterPart, column: number, theme: PosterTheme, layout: GridPosterLayout) {
   const { grid, gridLeft, gridTop } = layout
   const metrics = grid.metrics
@@ -1038,7 +1042,10 @@ function drawPart(ctx: CanvasRenderingContext2D, part: PosterPart, column: numbe
   const y = gridTop + part.y
   const w = grid.colWidth - metrics.inset * 2
   const h = part.height
-  const color = blockColorFor(theme, part.slot)
+  const suspended = isSuspendedSlot(part.slot)
+  const color = suspended
+    ? { bg: withAlpha(theme.text.muted, SUSPENDED_FILL_ALPHA), fg: theme.text.muted }
+    : blockColorFor(theme, part.slot)
   ctx.save()
   if ('status' in part.slot && part.slot.status === 'canceled')
     ctx.globalAlpha = 0.55
@@ -1046,8 +1053,9 @@ function drawPart(ctx: CanvasRenderingContext2D, part: PosterPart, column: numbe
   roundRect(ctx, x, y, w, h, theme.block.radius)
   ctx.fill()
   if (theme.block.bar) {
-    ctx.fillStyle = color.fg
-    roundRect(ctx, x + 3, y + 5, 3, h - 10, 1.5)
+    const barWidth = suspended ? SUSPENDED_BAR_W : BLOCK_BAR_W
+    ctx.fillStyle = suspended ? withAlpha(color.fg, 0.6) : color.fg
+    roundRect(ctx, x + 3, y + 5, barWidth, h - 10, barWidth / 2)
     ctx.fill()
   }
 
@@ -1056,8 +1064,8 @@ function drawPart(ctx: CanvasRenderingContext2D, part: PosterPart, column: numbe
   ctx.textBaseline = 'top'
   for (const line of part.lines) {
     const isTitle = line.role === 'title'
-    // 名称与周次、时间用满色，地点与教师稍淡
-    ctx.fillStyle = isTitle || line.role === 'weeks' ? color.fg : withAlpha(color.fg, 0.8)
+    // 名称与周次、时间用满色，地点与教师稍淡；停课的课一律用淡色字
+    ctx.fillStyle = suspended || isTitle || line.role === 'weeks' ? color.fg : withAlpha(color.fg, 0.8)
     const font = isTitle ? metrics.title : metrics.meta
     setFont(ctx, font.size, font.weight)
     ctx.fillText(line.text, textX, y + line.offsetY)
@@ -1066,8 +1074,8 @@ function drawPart(ctx: CanvasRenderingContext2D, part: PosterPart, column: numbe
   for (const pill of part.pills) {
     const pillX = textX + pill.offsetX
     const pillY = y + pill.offsetY
-    // 类别角标用风格的角标色；「旁」与「已取消」用格子文字色的浅底
-    const badge = pill.kind === 'audit' || pill.kind === 'status' ? null : theme.badges[pill.kind]
+    // 类别角标用风格的角标色；「旁」「调休」「已取消」「停课」以及停课的课上的角标用格子文字色的浅底
+    const badge = suspended || pill.kind === 'audit' || pill.kind === 'swap' || pill.kind === 'status' ? null : theme.badges[pill.kind]
     ctx.fillStyle = badge ? badge.bg : withAlpha(color.fg, 0.18)
     roundRect(ctx, pillX, pillY, pill.width, metrics.pillHeight, metrics.pillHeight / 2)
     ctx.fill()
@@ -1152,8 +1160,7 @@ async function renderPoster(canvas: Canvas2D, tiles: QrTile[]) {
   const { layout, scale } = fitGridLayout(content, rows.value, measurerFor(canvas.getContext('2d')), {
     hasLegend: legend.length > 0,
     hasTiles: tiles.length > 0,
-    // 「显示教师」只在整学期海报上提供
-    showTeacher: !week && showTeacher.value,
+    showTeacher: showTeacher.value,
     bar: theme.value.block.bar,
     hideWeekend: hideWeekend.value,
   })
@@ -1204,7 +1211,8 @@ async function render() {
   }
 }
 
-watch([themeKey, withQr, title, showTeacher, hideWeekend], () => {
+// 分享素材晚到时（标语与二维码）也重绘一次
+watch([themeKey, assets, title, showTeacher, hideWeekend], () => {
   if (!loading.value)
     scheduleRender()
 })
@@ -1225,9 +1233,7 @@ async function handleShowNameChange(value: boolean) {
 
 /** 点一下选项胶囊切换；「周末」选中表示画出周六、周日两列 */
 function toggleOption(key: PosterOptionKey) {
-  if (key === 'qr')
-    withQr.value = !withQr.value
-  else if (key === 'name')
+  if (key === 'name')
     void handleShowNameChange(!showName.value)
   else if (key === 'teacher')
     showTeacher.value = !showTeacher.value
@@ -1296,7 +1302,6 @@ async function load() {
   const assetsTask = getShareAssets()
     .then((result) => {
       assets.value = result
-      withQr.value = !!(result.miniapp_qrcode || result.official_qrcode)
     })
     .catch(() => undefined)
   try {

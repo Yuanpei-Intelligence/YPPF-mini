@@ -195,7 +195,7 @@ export interface Occurrence {
   end_section: number | null
   /** 稳定配色键（课程名或 id） */
   color_key: string
-  /** '' | 'canceled' | 'checked_in' | 'applied' */
+  /** '' | 'canceled' | 'checked_in' | 'applied' | 'suspended'（校历停课日上不了的课，照常返回，由前端淡化显示） */
   status: string
   /** {'entry_id'} | {'course_id','activity_id'} | {'activity_id'} | {'appoint_id'} | {'exam_id','entry_id'} */
   ref: Record<string, number | null>
@@ -206,6 +206,8 @@ export interface Occurrence {
   tag?: string
   /** 本次日程被单次 / 分段调整过。尚未升级的后端不返回 */
   modified?: boolean
+  /** 调休日按另一天课表上的课：原本的星期（1=周一 … 7=周日）；其余日程为 null 或不返回 */
+  swap_from?: number | null
 }
 
 /** 条目关联的课程库行（§8.1） */

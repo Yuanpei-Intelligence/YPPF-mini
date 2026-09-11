@@ -215,6 +215,27 @@ export function posterGridMetrics(bar = true): PosterGridMetrics {
 /** 排进网格的一项：整学期总览的每周时段（时刻为 HH:MM），或本周的一次日程（ISO 时间，没有周次） */
 export type PosterSlot = OverviewSlot | Occurrence
 
+/** 格子里「停课」「调休」小标的文案 */
+export const SUSPENDED_TAG = '停课'
+export const SWAP_TAG = '调休'
+
+/** 校历停课日（放假 / 停课复习考试）照常返回的课：写全文、整块淡化，堆叠时排在真正要上的日程之后。只有本周的日程会有 */
+export function isSuspendedSlot(slot: PosterSlot): boolean {
+  return 'status' in slot && slot.status === 'suspended'
+}
+
+/** 调休日按另一天课表上的课（swap_from 为原本的星期）。只有本周的日程会有 */
+export function isSwappedSlot(slot: PosterSlot): boolean {
+  return 'swap_from' in slot && !!slot.swap_from
+}
+
+/** 教师行的文字：整学期取时段的补充信息；本周只有课程与书院课的 subtitle 是教师（考试等的 subtitle 另有含义） */
+function teacherOf(slot: PosterSlot): string {
+  if ('status' in slot && slot.kind !== 'course' && slot.kind !== 'college')
+    return ''
+  return (slot.subtitle || '').trim()
+}
+
 /** weeks 行也放补写的节次或时刻 */
 export type PosterLineRole = 'title' | 'location' | 'weeks' | 'teacher'
 
@@ -225,8 +246,8 @@ export interface PosterTextLine {
   offsetY: number
 }
 
-/** 类别角标（书院课 / 活动 / 预约 / 考试）、旁听的「旁」、已取消 */
-export type PosterPillKind = PosterBadgeKind | 'audit' | 'status'
+/** 类别角标（书院课 / 活动 / 预约 / 考试）、旁听的「旁」、调休、已取消或停课 */
+export type PosterPillKind = PosterBadgeKind | 'audit' | 'swap' | 'status'
 
 /** 格子里的小标 */
 export interface PosterPill {
@@ -432,7 +453,7 @@ function isBadgeKind(kind: string): kind is PosterBadgeKind {
   return (POSTER_BADGE_KINDS as readonly string[]).includes(kind)
 }
 
-/** 小标依次为：类别角标（学校课程与自定义日程没有）、旁听、已取消（只有本周的日程会取消） */
+/** 小标依次为：类别角标（学校课程与自定义日程没有）、旁听、调休、已取消或停课（后两项只有本周的日程会有） */
 function pillsOf(slot: PosterSlot): { kind: PosterPillKind, text: string }[] {
   const pills: { kind: PosterPillKind, text: string }[] = []
   const kind = slot.kind
@@ -441,8 +462,12 @@ function pillsOf(slot: PosterSlot): { kind: PosterPillKind, text: string }[] {
     pills.push({ kind, text: badge })
   if (slot.role === 'audit')
     pills.push({ kind: 'audit', text: AUDIT_BADGE })
+  if (isSwappedSlot(slot))
+    pills.push({ kind: 'swap', text: SWAP_TAG })
   if ('status' in slot && slot.status === 'canceled')
     pills.push({ kind: 'status', text: STATUS_LABELS.canceled })
+  else if (isSuspendedSlot(slot))
+    pills.push({ kind: 'status', text: SUSPENDED_TAG })
   return pills
 }
 
@@ -505,7 +530,7 @@ function layoutPart(slot: PosterSlot, timeLabel: string, context: PartContext): 
     add(weeksText, 'weeks', 'words')
   if (timeLabel)
     add(timeLabel, 'weeks', 'words')
-  if (showTeacher && (slot.subtitle || '').trim())
+  if (showTeacher && teacherOf(slot))
     add(slot.subtitle, 'teacher')
   const placed = placePills(slot, lines, cursor, context)
   return { slot, lines, pills: placed.pills, contentHeight: placed.cursor + metrics.padBottom, y: 0, height: 0 }
@@ -616,7 +641,9 @@ export function layoutPosterGrid(input: PosterGridInput, measure: MeasureText): 
         column,
         top: Math.min(...group.map(item => item.top)),
         bottom: Math.max(...group.map(item => item.bottom)),
-        parts: group.map(({ slot }) => layoutPart(slot, slotTimeLabel(slot, mixed, !!input.clockTimes), context)),
+        // 真正要上的在前，停课的课排到组的最后
+        parts: [...group.filter(({ slot }) => !isSuspendedSlot(slot)), ...group.filter(({ slot }) => isSuspendedSlot(slot))]
+          .map(({ slot }) => layoutPart(slot, slotTimeLabel(slot, mixed, !!input.clockTimes), context)),
       })
     }
   })
