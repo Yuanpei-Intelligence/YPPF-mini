@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { EditScope, Entry, Occurrence } from '@/api/types/timetable'
+import type { EditScope, Entry, Occurrence, WeekDay } from '@/api/types/timetable'
 import type { RequestError } from '@/http/errors'
 import type { DetailActionKey } from '@/utils/timetable'
 import { computed, ref } from 'vue'
@@ -8,6 +8,7 @@ import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { confirmModal } from '@/utils/dialog'
 import {
+  ignoreCalendarPatch,
   isEditableOccurrence,
   isStoredSource,
   readLocalHiddenIds,
@@ -24,8 +25,10 @@ export interface DetailSheetInstance {
 export interface UseOccurrenceDetailOptions {
   /** 当前显示的学期码，编辑页据此定位条目 */
   termCode: () => string | undefined
-  /** 隐藏 / 停课 / 恢复 / 删除成功后刷新数据 */
+  /** 隐藏 / 停课 / 照常上课 / 恢复 / 删除成功后刷新数据 */
   onChanged: () => void | Promise<void>
+  /** 日程那天的校历信息（停课原因、调休），交给详情弹层；缺省没有 */
+  calendarDay?: (occurrence: Occurrence) => WeekDay | null
   /** 页面的统一异常展示 */
   handleApiException: (error: unknown, options?: { showToast?: boolean }) => RequestError
   showMessage: (message: string, type?: 'default' | 'error' | 'success' | 'warning') => void
@@ -52,6 +55,7 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
   }
 
   const detailHidden = computed(() => !!detail.value && isHidden(detail.value))
+  const detailCalendarDay = computed(() => (detail.value && options.calendarDay ? options.calendarDay(detail.value) : null))
 
   /** 导入页可能改了本机隐藏偏好；页面 onShow 时重读 */
   function reloadLocalPrefs() {
@@ -151,6 +155,14 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
     return true
   }
 
+  /** 照常上课（true）/ 恢复按校历停课（false）：按所选范围存为调整，刷新后格子随之变化 */
+  async function setIgnoreCalendar(item: Occurrence, entryId: number, value: boolean, scope: EditScope) {
+    const patch = ignoreCalendarPatch(value, scope, item.week)
+    await updateEntry(entryId, patch.payload, patch.options)
+    options.showMessage(value ? '已设为照常上课' : '已恢复按校历停课', 'success')
+    return true
+  }
+
   async function resetOverrides(item: Occurrence, entryId: number) {
     const count = entry.value?.overrides?.length ?? 0
     const ok = await confirmModal({
@@ -201,7 +213,7 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
     await options.onChanged()
   }
 
-  async function handleDetailAction(action: Exclude<DetailActionKey, 'edit'>) {
+  async function handleDetailAction(action: Exclude<DetailActionKey, 'edit'>, scope: EditScope = 'single') {
     const item = detail.value
     if (!item)
       return
@@ -231,6 +243,11 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
       case 'cancel_once':
         if (typeof entryId === 'number')
           await runMutation(() => cancelOnce(item, entryId))
+        return
+      case 'hold':
+      case 'unhold':
+        if (typeof entryId === 'number')
+          await runMutation(() => setIgnoreCalendar(item, entryId, action === 'hold', scope))
         return
       case 'reset':
         if (typeof entryId === 'number')
@@ -264,6 +281,7 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
     showHidden,
     localHiddenIds,
     detailHidden,
+    detailCalendarDay,
     isHidden,
     reloadLocalPrefs,
     openDetail,

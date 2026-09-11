@@ -10,9 +10,12 @@ import {
   clockOf,
   colorForOccurrence,
   displayEndClock,
+  isSuspended,
   KIND_BADGES,
+  STATUS_CLASSES,
   STATUS_LABELS,
   suspendsClasses,
+  swapNote,
   WEEKDAY_LABELS,
 } from '@/utils/timetable'
 
@@ -53,6 +56,10 @@ interface AgendaRow {
   status: string
   statusClass: string
   canceled: boolean
+  /** 校历停课日的课：字置灰，不划线 */
+  suspended: boolean
+  /** 调休搬来的课：「调休」 */
+  swap: string
   /** 地点 · 副标题 */
   meta: string
   /** 旁听 */
@@ -80,11 +87,8 @@ interface AgendaGroup {
 
 const RELATIVE_LABELS = ['今天', '明天', '后天']
 
-const STATUS_CLASSES: Record<string, string> = {
-  canceled: 'text-error',
-  checked_in: 'text-success',
-  applied: 'text-primary',
-}
+/** 「调休」用校历调休的颜色 */
+const SWAP_CLASS = calendarLabelClass('swap')
 
 function localIsoDate(): string {
   const now = new Date()
@@ -120,6 +124,8 @@ function toRow(occurrence: Occurrence): AgendaRow {
     status: STATUS_LABELS[occurrence.status] ?? '',
     statusClass: STATUS_CLASSES[occurrence.status] ?? 'text-fg-3',
     canceled: occurrence.status === 'canceled',
+    suspended: isSuspended(occurrence),
+    swap: swapNote(occurrence),
     meta: [occurrence.location, occurrence.subtitle].filter(Boolean).join(' · '),
     audit: occurrence.role === 'audit',
     tag: occurrence.tag ?? '',
@@ -195,7 +201,7 @@ const isEmpty = computed(() => props.days.every(day => day.occurrences.length ==
             >
               <!-- 时间列：等宽数字，起止上下排列 -->
               <view class="w-88rpx shrink-0 pt-0.5">
-                <text class="block text-sm text-fg-1 font-medium leading-tight tabular-nums">{{ row.start }}</text>
+                <text class="block text-sm font-medium leading-tight tabular-nums" :class="row.suspended ? 'text-fg-3' : 'text-fg-1'">{{ row.start }}</text>
                 <text class="mt-1 block text-2xs text-fg-3 leading-tight tabular-nums">{{ row.end }}</text>
               </view>
               <!-- 来源色点，同一门课与课表页同色 -->
@@ -204,7 +210,7 @@ const isEmpty = computed(() => props.days.every(day => day.occurrences.length ==
                 <view class="flex items-center gap-2">
                   <text
                     class="min-w-0 flex-1 truncate text-base font-medium"
-                    :class="[row.canceled ? 'line-through text-fg-3' : row.exam ? 'text-error-dark' : 'text-fg-1']"
+                    :class="[row.canceled ? 'line-through text-fg-3' : row.suspended ? 'text-fg-3' : row.exam ? 'text-error-dark' : 'text-fg-1']"
                   >
                     {{ row.occurrence.title }}
                   </text>
@@ -219,7 +225,10 @@ const isEmpty = computed(() => props.days.every(day => day.occurrences.length ==
                   </text>
                 </view>
                 <text v-if="row.meta" class="mt-0.5 block truncate text-xs text-fg-3">{{ row.meta }}</text>
-                <text v-if="row.status" class="mt-0.5 block text-2xs" :class="row.statusClass">{{ row.status }}</text>
+                <view v-if="row.status || row.swap" class="mt-0.5 flex items-center gap-2 text-2xs">
+                  <text v-if="row.status" :class="row.statusClass">{{ row.status }}</text>
+                  <text v-if="row.swap" :class="SWAP_CLASS">{{ row.swap }}</text>
+                </view>
               </view>
             </view>
           </template>

@@ -4,7 +4,7 @@ import type { UvToastInstance } from '@/hooks/useApiException'
 import type { DetailSheetInstance } from '@/hooks/useOccurrenceDetail'
 import type { WeekDirection } from '@/hooks/useWeekSwipe'
 import type { PaletteColor, TimetableDensity, WeekendMode, WeekPickerItem } from '@/utils/timetable'
-import type { GridMetrics, OverlapGroup } from '@/utils/timetable-grid'
+import type { CornerMarkerTone, GridMetrics, OverlapGroup } from '@/utils/timetable-grid'
 import { onLoad, onPullDownRefresh, onResize, onShareAppMessage, onShow, onUnload } from '@dcloudio/uni-app'
 import { computed, ref, watch } from 'vue'
 import { getWeek, listEntries } from '@/api/timetable'
@@ -24,6 +24,8 @@ import {
   calendarShortLabel,
   colorForOccurrence,
   dayInfo,
+  dayInfoOf,
+  isSuspended,
   markSwipeHintSeen,
   occurrenceRowSpan,
   readCachedWeekView,
@@ -52,11 +54,11 @@ import {
   BLOCK_PAD_Y,
   BREAK_HEIGHT,
   breakBoundaries,
+  cornerMarker,
   fitRowHeight,
   GRID_AXIS_WIDTH,
   GRID_BODY_WIDTH,
   gridBodyHeight,
-  KIND_MARKERS,
   layoutBlockText,
   NAME_ONLY_BELOW_SECTIONS,
   RELAXED_ROW_HEIGHT,
@@ -97,6 +99,16 @@ interface BlockMarker {
   style: string
 }
 
+/** Text, markers and +N chip of a suspended block */
+const SUSPENDED_FG = 'var(--yp-text-3)'
+/** Side bar or frame of a suspended block */
+const SUSPENDED_EDGE = 'var(--yp-text-4)'
+/** Corner-marker fills by tone; a kind marker takes the occurrence's colour */
+const MARKER_FILLS: Partial<Record<CornerMarkerTone, string>> = {
+  suspended: SUSPENDED_FG,
+  swap: 'var(--yp-color-primary)',
+}
+
 interface GridBlock {
   occurrence: Occurrence
   /** Overlapping occurrences drawn under this block; the detail sheet lists them */
@@ -113,6 +125,8 @@ interface GridBlock {
   /** 本次被调整过 */
   modified: boolean
   canceled: boolean
+  /** 校历停课日的课：置灰、斜纹底，仍可点开 */
+  suspended: boolean
   moreStyle: string
 }
 
@@ -190,8 +204,10 @@ const {
   selectDetail,
   handleDetailAction,
   handleDetailEdit,
+  detailCalendarDay,
 } = useOccurrenceDetail(detailSheet, {
   termCode: () => view.value?.term.code,
+  calendarDay: occurrence => dayInfoOf(view.value, occurrence.date),
   onChanged: () => refresh(),
   handleApiException,
   showMessage,
@@ -290,20 +306,23 @@ const zoneLabels = computed(() => zoneBoundaries(rows.value).map(boundary => ({
 function blockStyle(occurrence: Occurrence, color: PaletteColor, top: number, height: number, padY: number) {
   const column = Math.min(Math.max(occurrence.weekday, 1), 7) - 1
   const width = columnWidth.value
+  // 校历停课日的课：中性底色（斜纹见 .grid-block--suspended）、fg-3 字、浅灰色条
+  const suspended = isSuspended(occurrence)
+  const edge = suspended ? SUSPENDED_EDGE : color.fg
   // 自定义日程虚线框，考试实线红框，其余左侧色条
-  let border = `border-left: 4rpx solid ${color.fg}`
+  let border = `border-left: 4rpx solid ${edge}`
   if (occurrence.kind === 'custom')
-    border = `border: 2rpx dashed ${color.fg}`
+    border = `border: 2rpx dashed ${edge}`
   else if (occurrence.kind === 'exam')
-    border = `border: 2rpx solid ${color.fg}`
+    border = `border: 2rpx solid ${edge}`
   const parts = [
     `left: ${(column * width).toFixed(3)}%`,
     `width: calc(${width.toFixed(3)}% - ${BLOCK_GAP}rpx)`,
     `top: ${top.toFixed(1)}rpx`,
     `height: ${height.toFixed(1)}rpx`,
     `padding: ${padY.toFixed(1)}rpx ${BLOCK_PAD_RIGHT}rpx ${padY.toFixed(1)}rpx ${BLOCK_PAD_LEFT}rpx`,
-    `background-color: ${color.bg}`,
-    `color: ${color.fg}`,
+    `background-color: ${suspended ? 'var(--yp-bg-fill)' : color.bg}`,
+    `color: ${suspended ? SUSPENDED_FG : color.fg}`,
     border,
   ]
   if (isHidden(occurrence))
@@ -314,12 +333,14 @@ function blockStyle(occurrence: Occurrence, color: PaletteColor, top: number, he
 function toBlock(group: OverlapGroup): GridBlock {
   const { primary: occurrence, span, others } = group
   const color = colorForOccurrence(occurrence)
+  const suspended = isSuspended(occurrence)
   const markers: BlockMarker[] = []
   if (occurrence.role === 'audit')
-    markers.push({ text: AUDIT_BADGE, style: 'background-color: var(--yp-color-warning)' })
-  const kindMarker = KIND_MARKERS[occurrence.kind]
-  if (kindMarker)
-    markers.push({ text: kindMarker, style: `background-color: ${color.fg}` })
+    markers.push({ text: AUDIT_BADGE, style: `background-color: ${suspended ? SUSPENDED_FG : 'var(--yp-color-warning)'}` })
+  // One status / kind marker: 停 over 调 over 书 / 活 / 约 / 考
+  const marker = cornerMarker(occurrence)
+  if (marker)
+    markers.push({ text: marker.text, style: `background-color: ${MARKER_FILLS[marker.tone] ?? color.fg}` })
   // Markers start at the padding edge; the title's first line starts after them plus a small gap
   const indent = markers.length ? markers.length * BLOCK_MARKER_SIZE - BLOCK_PAD_LEFT + 3 : 0
   // The left colour bar takes 4rpx of width; dashed / solid frames take 2rpx on every side
@@ -351,7 +372,8 @@ function toBlock(group: OverlapGroup): GridBlock {
     markers,
     modified: !!occurrence.modified,
     canceled: occurrence.status === 'canceled',
-    moreStyle: `background-color: ${color.fg}`,
+    suspended,
+    moreStyle: `background-color: ${suspended ? SUSPENDED_FG : color.fg}`,
   }
 }
 
@@ -901,10 +923,11 @@ onShareAppMessage(() => ({
                 v-for="block in blocks"
                 :key="block.occurrence.id"
                 class="grid-block absolute box-border overflow-hidden rounded-sm"
+                :class="{ 'grid-block--suspended': block.suspended }"
                 :style="block.style"
                 @click="openBlock(block)"
               >
-                <!-- 旁听与类别标记在左上角，标题首行缩进让开，不占整行 -->
+                <!-- 旁听与停 / 调 / 类别标记在左上角，标题首行缩进让开，不占整行 -->
                 <view v-if="block.markers.length" class="grid-block__markers">
                   <text
                     v-for="marker in block.markers"
@@ -1022,6 +1045,7 @@ onShareAppMessage(() => ({
     :hidden="detailHidden"
     :busy="detailBusy"
     :overlaps="detailOverlaps"
+    :calendar-day="detailCalendarDay"
     @action="handleDetailAction"
     @edit="handleDetailEdit"
     @switch="selectDetail"
@@ -1244,6 +1268,17 @@ onShareAppMessage(() => ({
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0.7;
+}
+
+/* A lesson on a no-class day: bg-fill-active stripes over the bg-fill ground set inline */
+.grid-block--suspended {
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--yp-bg-fill-active) 0,
+    var(--yp-bg-fill-active) 3rpx,
+    transparent 3rpx,
+    transparent 12rpx
+  );
 }
 
 .grid-block__markers {

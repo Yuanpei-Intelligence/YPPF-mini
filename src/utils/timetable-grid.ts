@@ -1,6 +1,6 @@
 import type { Occurrence, OccurrenceKind } from '@/api/types/timetable'
 import type { RowSpan, SectionRow } from '@/utils/timetable'
-import { clockOf, timeToMinutes } from '@/utils/timetable'
+import { clockOf, isSuspended, swapFromWeekday, timeToMinutes } from '@/utils/timetable'
 
 /*
  * Week-grid layout for the timetable page: row height fitted to the window, thin breaks between
@@ -196,6 +196,28 @@ export const KIND_MARKERS: Partial<Record<OccurrenceKind, string>> = {
   exam: '考',
 }
 
+/** Corner marker of a lesson on a no-class day (status suspended) */
+export const SUSPENDED_MARKER = '停'
+/** Corner marker of a lesson moved to a swap day (swap_from) */
+export const SWAP_MARKER = '调'
+
+export type CornerMarkerTone = 'suspended' | 'swap' | 'kind'
+
+export interface CornerMarker {
+  text: string
+  tone: CornerMarkerTone
+}
+
+/** The one status / kind marker a block carries next to 旁: 停 over 调 over the kind's marker; null for none */
+export function cornerMarker(item: Pick<Occurrence, 'status' | 'swap_from' | 'kind'>): CornerMarker | null {
+  if (isSuspended(item))
+    return { text: SUSPENDED_MARKER, tone: 'suspended' }
+  if (swapFromWeekday(item))
+    return { text: SWAP_MARKER, tone: 'swap' }
+  const text = KIND_MARKERS[item.kind]
+  return text ? { text, tone: 'kind' } : null
+}
+
 /* -------------------- Overlaps -------------------- */
 
 /** Which kind is drawn when occurrences overlap: lower wins */
@@ -212,9 +234,13 @@ function durationMinutes(item: Occurrence): number {
   return timeToMinutes(clockOf(item.end)) - timeToMinutes(clockOf(item.start))
 }
 
-/** Order of overlapping occurrences: kind priority, then earlier start, then longer, then enrolled before audit */
+/**
+ * Order of overlapping occurrences: anything that takes place before a suspended lesson, then kind priority,
+ * earlier start, longer, enrolled before audit
+ */
 export function compareOverlapPriority(a: Occurrence, b: Occurrence): number {
-  return (OVERLAP_PRIORITY[a.kind] ?? 9) - (OVERLAP_PRIORITY[b.kind] ?? 9)
+  return Number(isSuspended(a)) - Number(isSuspended(b))
+    || (OVERLAP_PRIORITY[a.kind] ?? 9) - (OVERLAP_PRIORITY[b.kind] ?? 9)
     || a.start.localeCompare(b.start)
     || durationMinutes(b) - durationMinutes(a)
     || Number(a.role === 'audit') - Number(b.role === 'audit')
@@ -240,6 +266,7 @@ export function spansOverlap(a: RowSpan, b: RowSpan): boolean {
  * occurrences are visited in priority order: one that overlaps an already placed block joins the
  * first such block (the one with the highest priority), otherwise it becomes a block of its own.
  * Overlap is judged on grid rows, so items that share a row without sharing minutes still collapse.
+ * Suspended lessons are visited last, so they never cover one that takes place; they still count in +N.
  */
 export function resolveOverlaps(items: Occurrence[], spanOf: (item: Occurrence) => RowSpan): OverlapGroup[] {
   const byDate = new Map<string, Occurrence[]>()
