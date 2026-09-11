@@ -61,6 +61,7 @@ import {
   gridBodyHeight,
   layoutBlockText,
   NAME_ONLY_BELOW_SECTIONS,
+  overlapBlockModel,
   RELAXED_ROW_HEIGHT,
   resolveOverlaps,
   rowLineTop,
@@ -111,8 +112,12 @@ const MARKER_FILLS: Partial<Record<CornerMarkerTone, string>> = {
 
 interface GridBlock {
   occurrence: Occurrence
-  /** Overlapping occurrences drawn under this block; the detail sheet lists them */
-  others: Occurrence[]
+  /** This occurrence first, then what the detail sheet's switcher offers */
+  detailGroup: Occurrence[]
+  /** The +N chip: occurrences grouped under this block plus suspended lessons it covers entirely; 0 for none */
+  more: number
+  /** A suspended lesson overlapping a normal block: drawn at its own time under it */
+  background: boolean
   style: string
   titleStyle: string
   roomStyle: string
@@ -303,7 +308,7 @@ const zoneLabels = computed(() => zoneBoundaries(rows.value).map(boundary => ({
   style: `top: ${zoneLabelTop(boundary.index, metrics.value)}rpx; height: ${ZONE_LABEL_HEIGHT}rpx`,
 })))
 
-function blockStyle(occurrence: Occurrence, color: PaletteColor, top: number, height: number, padY: number) {
+function blockStyle(occurrence: Occurrence, color: PaletteColor, top: number, height: number, padY: number, zIndex: number) {
   const column = Math.min(Math.max(occurrence.weekday, 1), 7) - 1
   const width = columnWidth.value
   // 校历停课日的课：中性底色（斜纹见 .grid-block--suspended）、fg-3 字、浅灰色条
@@ -324,6 +329,8 @@ function blockStyle(occurrence: Occurrence, color: PaletteColor, top: number, he
     `background-color: ${suspended ? 'var(--yp-bg-fill)' : color.bg}`,
     `color: ${suspended ? SUSPENDED_FG : color.fg}`,
     border,
+    // Background suspended lessons sit under the normal blocks, whose opaque fill leaves only the uncovered part
+    `z-index: ${zIndex}`,
   ]
   if (isHidden(occurrence))
     parts.push('opacity: 0.45')
@@ -331,7 +338,8 @@ function blockStyle(occurrence: Occurrence, color: PaletteColor, top: number, he
 }
 
 function toBlock(group: OverlapGroup): GridBlock {
-  const { primary: occurrence, span, others } = group
+  const { primary: occurrence, span } = group
+  const model = overlapBlockModel(group)
   const color = colorForOccurrence(occurrence)
   const suspended = isSuspended(occurrence)
   const markers: BlockMarker[] = []
@@ -357,13 +365,15 @@ function toBlock(group: OverlapGroup): GridBlock {
     widthRpx: GRID_BODY_WIDTH / columnCount.value - BLOCK_GAP - BLOCK_PAD_LEFT - BLOCK_PAD_RIGHT - BLOCK_EDGE,
     heightRpx: height - padY * 2 - (framed ? 4 : 0),
     indentRpx: indent,
-    moreRpx: others.length ? BLOCK_MORE_HEIGHT : 0,
+    moreRpx: model.more ? BLOCK_MORE_HEIGHT : 0,
     nameOnly: span.span < NAME_ONLY_BELOW_SECTIONS,
   })
   return {
     occurrence,
-    others,
-    style: blockStyle(occurrence, color, top, height, padY),
+    detailGroup: model.detailGroup,
+    more: model.more,
+    background: model.background,
+    style: blockStyle(occurrence, color, top, height, padY, model.zIndex),
     titleStyle: `-webkit-line-clamp: ${layout.titleLines}; text-indent: ${indent}rpx`,
     roomStyle: `-webkit-line-clamp: ${layout.roomLines}`,
     roomLines: layout.roomLines,
@@ -377,7 +387,7 @@ function toBlock(group: OverlapGroup): GridBlock {
   }
 }
 
-/** One block per group of overlapping occurrences, drawn at full column width */
+/** One block per overlap group at full column width; suspended lessons under a normal block come first */
 const blocks = computed<GridBlock[]>(() =>
   resolveOverlaps(gridOccurrences.value, item => occurrenceRowSpan(item, rows.value)).map(toBlock),
 )
@@ -655,7 +665,7 @@ function openBlock(block: GridBlock) {
   // A drag that ends over a block must not open it
   if (swipeBusy.value)
     return
-  detailGroup.value = [block.occurrence, ...block.others]
+  detailGroup.value = block.detailGroup
   openDetail(block.occurrence)
 }
 
@@ -919,6 +929,7 @@ onShareAppMessage(() => ({
                 :style="line.style"
               />
 
+              <!-- 与照常进行的日程重叠的停课课画在下层，只露出没被盖住的部分；点露出的部分打开它的详情 -->
               <view
                 v-for="block in blocks"
                 :key="block.occurrence.id"
@@ -944,8 +955,8 @@ onShareAppMessage(() => ({
                 <text v-if="block.roomLines" class="grid-block__room" :style="block.roomStyle">{{ block.occurrence.location }}</text>
                 <text v-if="block.teacherLines" class="grid-block__teacher">{{ block.occurrence.subtitle }}</text>
                 <text v-if="block.tagLines" class="grid-block__tag">#{{ block.occurrence.tag }}</text>
-                <!-- 同一时段被盖住的其它日程数；点开详情可切换 -->
-                <text v-if="block.others.length" class="grid-block__more" :style="block.moreStyle">+{{ block.others.length }}</text>
+                <!-- 同一时段被盖住的其它日程数（含整个被盖住的停课课）；点开详情可切换 -->
+                <text v-if="block.more" class="grid-block__more" :style="block.moreStyle">+{{ block.more }}</text>
               </view>
 
               <view
