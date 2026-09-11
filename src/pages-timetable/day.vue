@@ -23,10 +23,12 @@ import {
   EXAM_WEEK_LABEL,
   isExamWeek,
   isIsoDate,
+  isSuspended,
   KIND_BADGES,
   locateDate,
   STATUS_LABELS,
   suspendsClasses,
+  swapNote,
   todayIso,
   WEEKDAY_LABELS,
   weekdayOf,
@@ -58,6 +60,10 @@ interface DayRow {
   /** 本次被调整过 */
   modified: boolean
   exam: boolean
+  /** 校历停课日的课：字置灰，不划线 */
+  suspended: boolean
+  /** 调休搬来的课：「调休」 */
+  swap: string
 }
 
 /** 这天要请求的周；inTerm=false 表示这天不在任何学期的教学周内，只是借当前学期兜底 */
@@ -103,8 +109,10 @@ const {
   openDetail,
   handleDetailAction,
   handleDetailEdit,
+  detailCalendarDay,
 } = useOccurrenceDetail(detailSheet, {
   termCode: () => view.value?.term.code,
+  calendarDay: occurrence => dayInfoOf(view.value, occurrence.date),
   onChanged: () => refresh(),
   handleApiException,
   showMessage,
@@ -181,6 +189,8 @@ const rows = computed<DayRow[]>(() => {
       tag: occurrence.tag ?? '',
       modified: !!occurrence.modified,
       exam: occurrence.kind === 'exam',
+      suspended: isSuspended(occurrence),
+      swap: swapNote(occurrence),
     }))
 })
 
@@ -355,7 +365,7 @@ onPullDownRefresh(async () => {
         >
           <view class="w-1.5 shrink-0" :style="{ backgroundColor: row.color.fg }" />
           <view class="w-20 shrink-0 py-3 pl-3">
-            <text class="block text-sm text-fg-1 font-medium">{{ row.start }}</text>
+            <text class="block text-sm font-medium" :class="row.suspended ? 'text-fg-3' : 'text-fg-1'">{{ row.start }}</text>
             <text class="block text-xs text-fg-3">{{ row.end }}</text>
             <text v-if="row.sections" class="mt-1 block text-2xs text-fg-3">{{ row.sections }}</text>
           </view>
@@ -363,7 +373,7 @@ onPullDownRefresh(async () => {
             <view class="flex items-start gap-2">
               <text
                 class="min-w-0 flex-1 text-sm font-medium leading-5"
-                :class="[row.occurrence.status === 'canceled' ? 'line-through text-fg-3' : row.exam ? 'text-error-dark' : 'text-fg-1']"
+                :class="[row.occurrence.status === 'canceled' ? 'line-through text-fg-3' : row.suspended ? 'text-fg-3' : row.exam ? 'text-error-dark' : 'text-fg-1']"
               >
                 {{ row.occurrence.title }}
               </text>
@@ -386,10 +396,11 @@ onPullDownRefresh(async () => {
               <text class="i-carbon-location mr-1 shrink-0 text-sm text-fg-3" />
               <text class="min-w-0 flex-1 truncate">{{ row.occurrence.location }}</text>
             </view>
-            <view v-if="row.status || row.hidden || row.tag || row.modified" class="mt-1.5 flex flex-wrap gap-1.5">
+            <view v-if="row.status || row.swap || row.hidden || row.tag || row.modified" class="mt-1.5 flex flex-wrap gap-1.5">
               <text v-if="row.tag" class="rounded-full bg-primary-light px-2 text-2xs text-primary leading-5">{{ row.tag }}</text>
               <text v-if="row.modified" class="rounded-full bg-warning-light px-2 text-2xs text-warning leading-5">本次已调整</text>
               <text v-if="row.status" class="rounded-full bg-fill px-2 text-2xs text-fg-2 leading-5">{{ row.status }}</text>
+              <text v-if="row.swap" class="rounded-full bg-fill px-2 text-2xs text-primary leading-5">{{ row.swap }}</text>
               <text v-if="row.hidden" class="rounded-full bg-fill px-2 text-2xs text-fg-3 leading-5">已隐藏</text>
             </view>
           </view>
@@ -407,6 +418,7 @@ onPullDownRefresh(async () => {
     :entry-error="detailEntryError"
     :hidden="detailHidden"
     :busy="detailBusy"
+    :calendar-day="detailCalendarDay"
     @action="handleDetailAction"
     @edit="handleDetailEdit"
   />

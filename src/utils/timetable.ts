@@ -7,6 +7,7 @@ import type {
   EntryCategory,
   EntryExam,
   EntryOverride,
+  EntryPatch,
   EntryRole,
   LessonBlock,
   Occurrence,
@@ -53,7 +54,19 @@ export const STATUS_LABELS: Record<string, string> = {
   canceled: '已取消',
   checked_in: '已签到',
   applied: '已报名',
+  suspended: '停课',
 }
+
+/** 列表里状态文字的颜色：停课置灰但不划线，划线只留给已取消 */
+export const STATUS_CLASSES: Record<string, string> = {
+  canceled: 'text-error',
+  checked_in: 'text-success',
+  applied: 'text-primary',
+  suspended: 'text-fg-3',
+}
+
+/** 调休搬来的课在列表里的标注 */
+export const SWAP_NOTE = '调休'
 
 export const PARITY_LABELS = ['每周', '单周', '双周'] as const
 
@@ -446,6 +459,75 @@ export function weekSuspendedReason(view: WeekView | null | undefined): string {
   return reasons.join(' · ')
 }
 
+/** 校历停课日的课（status suspended）：照常显示，但服务端不提醒、不算冲突、不进 ICS */
+export function isSuspended(item: Pick<Occurrence, 'status'>): boolean {
+  return item.status === 'suspended'
+}
+
+/** 调休搬来的课原本的周几（1–7）；不是调休搬来的课为 0 */
+export function swapFromWeekday(item: Pick<Occurrence, 'swap_from'>): number {
+  const weekday = item.swap_from
+  return typeof weekday === 'number' && Number.isInteger(weekday) && weekday >= 1 && weekday <= 7 ? weekday : 0
+}
+
+/** 调休搬来的课在列表里标「调休」，其它为空串 */
+export function swapNote(item: Pick<Occurrence, 'swap_from'>): string {
+  return swapFromWeekday(item) ? SWAP_NOTE : ''
+}
+
+type CalendarDayInfo = Pick<WeekDay, 'kind' | 'label' | 'follows_weekday'>
+
+/** 这天自己的课是否停上：放假 / 考试周，或按别的周几上课的调休日 */
+export function calendarSuspendsOwnLessons(day: Pick<WeekDay, 'kind' | 'follows_weekday'> | null | undefined): boolean {
+  if (!day)
+    return false
+  return suspendsClasses(day.kind) || (day.kind === 'swap' && !!day.follows_weekday)
+}
+
+/** 停课原因：调休日写按周几上课，其余用校历名称，没有名称时用放假 / 考试周 */
+function calendarReason(day: CalendarDayInfo | null | undefined): string {
+  const kind = day?.kind
+  if (kind === 'swap' && day?.follows_weekday)
+    return `调休，按周${WEEKDAY_LABELS[day.follows_weekday - 1] ?? day.follows_weekday}课表上课`
+  if (day?.label)
+    return day.label
+  return suspendsClasses(kind) ? SUSPENDED_LABELS[kind] : '校历停课'
+}
+
+/** 详情里停课课程的说明：`本次停课：9/25 中秋节放假`；不是停课的课为空串 */
+export function suspendedNotice(item: Pick<Occurrence, 'status' | 'date'>, day: CalendarDayInfo | null | undefined): string {
+  return isSuspended(item) ? `本次停课：${shortDate(item.date)} ${calendarReason(day)}` : ''
+}
+
+/** 详情里「照常上课」的说明：`已设为照常上课：9/25 中秋节放假` */
+export function heldNotice(item: Pick<Occurrence, 'date'>, day: CalendarDayInfo | null | undefined): string {
+  return `已设为照常上课：${shortDate(item.date)} ${calendarReason(day)}`
+}
+
+/** 详情里调休课的说明：`调休：按周二课表上课`；不是调休搬来的课为空串 */
+export function swapDescription(item: Pick<Occurrence, 'swap_from'>): string {
+  const weekday = swapFromWeekday(item)
+  return weekday ? `调休：按周${WEEKDAY_LABELS[weekday - 1]}课表上课` : ''
+}
+
+/**
+ * 「照常上课」：存储条目的课在校历停课日仍按普通日程返回（ignore_calendar 在这一周生效）。
+ * 条目详情的调整里有这个键就以它为准；没加载详情或没有这个键时，按“停课日 + status 为空 + 不是调休副本”推断。
+ * 不返回 swap_from 的旧后端没有这项功能
+ */
+export function heldDespiteCalendar(
+  item: Occurrence,
+  day: Pick<WeekDay, 'kind' | 'follows_weekday'> | null | undefined,
+  entry?: Entry | null,
+): boolean {
+  if (item.swap_from === undefined || item.status !== '' || swapFromWeekday(item) || item.kind === 'exam')
+    return false
+  if (!isEditableOccurrence(item) || !calendarSuspendsOwnLessons(day))
+    return false
+  const resolved = entry ? effectiveOverrideAt(entry, item.week).fields.ignore_calendar : undefined
+  return resolved ?? true
+}
+
 /*
  * Week grid: a short tag under each day header, the full labels in one strip above the grid.
  * The day view has room for the full label and keeps using calendarLabelClass directly.
@@ -752,7 +834,7 @@ export function describeOccurrenceTime(item: Occurrence): string {
   return parts.join(' · ')
 }
 
-export type DetailActionKey = 'activity' | 'appoint' | 'edit' | 'cancel_once' | 'reset' | 'hide' | 'unhide' | 'delete'
+export type DetailActionKey = 'activity' | 'appoint' | 'edit' | 'cancel_once' | 'hold' | 'unhold' | 'reset' | 'hide' | 'unhide' | 'delete'
 
 export interface DetailAction {
   key: DetailActionKey
@@ -760,12 +842,16 @@ export interface DetailAction {
   primary: boolean
   /** 红色文字的破坏性操作 */
   danger?: boolean
+  /** 文案长，独占一行 */
+  wide?: boolean
 }
 
 export interface DetailActionContext {
   hidden: boolean
   /** 已加载的条目详情；未加载 / 加载失败时为 null，此时按最保守的集合给操作 */
   entry?: Entry | null
+  /** 已设为照常上课（heldDespiteCalendar） */
+  held?: boolean
 }
 
 /** 存储条目（含手动考试）的日程：有 entry_id 且来源是本系统存储的 */
@@ -775,7 +861,8 @@ export function isEditableOccurrence(item: Occurrence): boolean {
 
 /**
  * 详情弹层的操作：书院课 / 活动 → 查看活动，预约 → 查看预约；
- * 存储条目 → 编辑、本次停课（考试除外）、恢复默认（有调整时）、删除（手动条目）；任何日程都可隐藏 / 取消隐藏
+ * 存储条目 → 编辑、本次停课（考试除外）、恢复默认（有调整时）、删除（手动条目）；任何日程都可隐藏 / 取消隐藏。
+ * 校历停课日的课以「照常上课」为主操作、不再给本次停课；已设为照常上课的课多一个「恢复按校历停课」
  */
 export function detailActionsFor(item: Occurrence, context: DetailActionContext): DetailAction[] {
   const actions: DetailAction[] = []
@@ -787,9 +874,14 @@ export function detailActionsFor(item: Occurrence, context: DetailActionContext)
     actions.push({ key: 'appoint', label: '查看预约', primary: true })
   }
   else if (isEditableOccurrence(item)) {
-    actions.push({ key: 'edit', label: '编辑', primary: true })
-    if (item.kind !== 'exam')
+    const suspended = isSuspended(item)
+    if (suspended && item.kind !== 'exam')
+      actions.push({ key: 'hold', label: '照常上课（恢复显示并提醒）', primary: true, wide: true })
+    actions.push({ key: 'edit', label: '编辑', primary: !suspended })
+    if (item.kind !== 'exam' && !suspended)
       actions.push({ key: 'cancel_once', label: '本次停课', primary: false })
+    if (context.held)
+      actions.push({ key: 'unhold', label: '恢复按校历停课', primary: false })
     if (entry?.overrides?.length)
       actions.push({ key: 'reset', label: '恢复默认', primary: false })
   }
@@ -806,6 +898,19 @@ export function detailActionsFor(item: Occurrence, context: DetailActionContext)
 /** 条目是否跨多个周（编辑时才需要选择范围） */
 export function entrySpansWeeks(entry: Entry): boolean {
   return entry.week_end > entry.week_start
+}
+
+export interface ScopedPatch {
+  payload: EntryPatch
+  options: { scope: EditScope, week?: number }
+}
+
+/** 照常上课（true）/ 恢复按校历停课（false）的 PATCH：single / following 带第 week 周，all 不带 */
+export function ignoreCalendarPatch(value: boolean, scope: EditScope, week: number): ScopedPatch {
+  return {
+    payload: { ignore_calendar: value },
+    options: scope === 'all' ? { scope } : { scope, week },
+  }
 }
 
 /** 调整在第 week 周是否生效（null 边界为开区间） */
