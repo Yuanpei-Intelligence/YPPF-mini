@@ -31,8 +31,10 @@ import {
   formatDateTime,
   readPkuCredential,
   readShowHidden,
+  readWeekendMode,
   savePkuCredential,
   saveShowHidden,
+  saveWeekendMode,
 } from '@/utils/timetable'
 
 definePage({
@@ -106,6 +108,8 @@ function hasLoginFieldErrors() {
 // 设置
 const savingKeys = ref<Record<string, boolean>>({})
 const showHidden = ref(readShowHidden())
+/** Opt-in: the week grid shows Saturday and Sunday unless this is switched on (device preference) */
+const hideWeekend = ref(readWeekendMode() === 'hide')
 const ics = ref<IcsOut | null>(null)
 const icsLoading = ref(false)
 const filterSheet = ref<FilterSheetInstance | null>(null)
@@ -401,6 +405,11 @@ async function handleToggle(key: ToggleKey, value: boolean) {
 function handleShowHiddenChange(value: boolean) {
   showHidden.value = value
   saveShowHidden(value)
+}
+
+function handleHideWeekendChange(value: boolean) {
+  hideWeekend.value = value
+  saveWeekendMode(value ? 'hide' : 'show')
 }
 
 function openFilter() {
@@ -862,6 +871,13 @@ onLoad((options) => {
             <text class="block text-xs text-fg-3">打开后可在课表里取消隐藏</text>
           </view>
           <uv-switch :model-value="showHidden" size="22" :active-color="tokens.primary" @change="handleShowHiddenChange" />
+        </view>
+        <view class="flex items-center justify-between border-t border-line-light py-3">
+          <view class="min-w-0 flex-1 pr-3">
+            <text class="block text-sm text-fg-2">隐藏周末</text>
+            <text class="block text-xs text-fg-3">周视图不显示周六、周日两列；周末有日程时课表上方会提示</text>
+          </view>
+          <uv-switch :model-value="hideWeekend" size="22" :active-color="tokens.primary" @change="handleHideWeekendChange" />
         </view>
 
         <view v-if="settings" class="mt-2 border-t border-line-light pt-3">
