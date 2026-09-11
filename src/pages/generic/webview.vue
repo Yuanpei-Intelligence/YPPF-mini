@@ -22,7 +22,8 @@ const url = computed(() => {
     return ''
   if (isPublic.value)
     return toBackendURL(uri.value)
-  return `${toBackendURL('/redirect')}?ticket=${ticket.value}&to=${encodeURIComponent(toBackendURL(uri.value))}`
+  // 当 uri 为后端相对路径时，to 参数直接传相对路径，避免 develop 环境（局域网 IP）与后端 base_url 不一致导致被重定向到首页
+  return `${toBackendURL('/redirect')}?ticket=${ticket.value}&to=${encodeURIComponent(uri.value)}`
 })
 
 async function ensureTicketReady() {

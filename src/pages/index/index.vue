@@ -9,7 +9,8 @@ import { everydaySignIn, getUserMe } from '@/api/login'
 import ActivityCard from '@/components/ActivityCard.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
-import { toBackendURL } from '@/utils'
+import { isPageTabbar } from '@/tabbar/store'
+import { getAllPages, toBackendURL } from '@/utils'
 import { openWebview } from '@/utils/webview'
 
 defineOptions({
@@ -24,6 +25,9 @@ definePage({
     navigationBarTitleText: '首页',
   },
 })
+
+// 原生小程序页面路由集合（主包 + 分包），用于区分后端相对路径与原生页面
+const nativeRoutePaths = new Set(getAllPages().map(page => page.path))
 
 const notifyRef = ref()
 const toastRef = ref<UvToastInstance | null>(null)
@@ -81,16 +85,31 @@ async function onCarouselClick(index: number) {
   const item = carouselList.value[index]
   if (!item?.redirect_url)
     return
-  if (item.redirect_url.startsWith('http')) {
+  const target = item.redirect_url
+  if (target.startsWith('http')) {
     // #ifdef H5
-    window.open(item.redirect_url)
+    window.open(target)
     // #endif
     // #ifndef H5
-    await openWebview({ uri: item.redirect_url })
+    await openWebview({ uri: target })
     // #endif
+    return
+  }
+
+  // 原生小程序页面（含分包 /pages-auth/**）走原生跳转，其余后端相对路径走 webview
+  const nativePath = target.split('?')[0]
+  if (!nativeRoutePaths.has(nativePath)) {
+    // 后端相对路径（如 /birthboard/、/stuinfo 等），通过 webview 打开
+    await openWebview({ uri: target })
+    return
+  }
+
+  // tabbar 页面必须用 switchTab，且不能带 query
+  if (isPageTabbar(nativePath)) {
+    uni.switchTab({ url: nativePath })
   }
   else {
-    uni.navigateTo({ url: item.redirect_url })
+    uni.navigateTo({ url: target })
   }
 }
 
