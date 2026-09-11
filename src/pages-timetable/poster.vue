@@ -144,6 +144,15 @@ interface GridLayoutOptions {
   hideWeekend: boolean
 }
 
+type PosterOptionKey = 'qr' | 'name' | 'teacher' | 'weekend'
+
+/** 海报选项胶囊：selected 表示画进海报 */
+interface PosterOption {
+  key: PosterOptionKey
+  label: string
+  selected: boolean
+}
+
 interface HeaderText {
   title: string
   subtitle: string
@@ -282,6 +291,18 @@ const visibleOccurrences = computed(() => {
 const canHideWeekend = computed(() => (effectiveMode.value === 'term'
   ? !!overview.value && !hasWeekendSlots(overview.value.slots)
   : !!view.value && !hasWeekendSlots(visibleOccurrences.value)))
+/** 选项胶囊，选中即画进海报：二维码（有分享素材时）、姓名、教师（整学期）、周末（周六、周日没有日程时才可去掉） */
+const optionChips = computed<PosterOption[]>(() => {
+  const chips: PosterOption[] = []
+  if (hasAssets.value)
+    chips.push({ key: 'qr', label: '二维码', selected: withQr.value })
+  chips.push({ key: 'name', label: '姓名', selected: showName.value })
+  if (effectiveMode.value === 'term')
+    chips.push({ key: 'teacher', label: '教师', selected: showTeacher.value })
+  if (canHideWeekend.value)
+    chips.push({ key: 'weekend', label: '周末', selected: !hideWeekend.value })
+  return chips
+})
 /** 网格行与课表页同一套时间轴：节次表，日程伸出节次表时前后补整点的钟点行（section 为 0） */
 const rows = computed(() => weekGridRows(
   activeTerm.value,
@@ -1195,10 +1216,6 @@ function selectTheme(key: PosterThemeKey) {
   savePosterTheme(key)
 }
 
-function handleQrChange(value: boolean) {
-  withQr.value = value
-}
-
 async function handleShowNameChange(value: boolean) {
   showName.value = value
   // 直接从分享 / 深链进入时用户资料可能还没拉过；补拉失败只是海报上没名字，不提示
@@ -1206,12 +1223,16 @@ async function handleShowNameChange(value: boolean) {
     await userStore.fetchUserInfo().catch(() => undefined)
 }
 
-function handleTeacherChange(value: boolean) {
-  showTeacher.value = value
-}
-
-function handleHideWeekendChange(value: boolean) {
-  hideWeekend.value = value
+/** 点一下选项胶囊切换；「周末」选中表示画出周六、周日两列 */
+function toggleOption(key: PosterOptionKey) {
+  if (key === 'qr')
+    withQr.value = !withQr.value
+  else if (key === 'name')
+    void handleShowNameChange(!showName.value)
+  else if (key === 'teacher')
+    showTeacher.value = !showTeacher.value
+  else
+    hideWeekend.value = !hideWeekend.value
 }
 
 /** 旧后端没有整学期接口：路由级 404，不带学期相关的错误码 */
@@ -1452,23 +1473,22 @@ onShareAppMessage(() => {
       </scroll-view>
       <text class="mt-1 block px-1 text-2xs text-fg-3">{{ theme.labels.description }}</text>
 
-      <!-- 开关 -->
-      <view class="mt-2 flex flex-wrap items-center justify-end gap-x-5 gap-y-2 rounded-lg bg-card px-4 py-2.5 shadow-card">
-        <view v-if="hasAssets" class="flex items-center gap-2">
-          <text class="text-sm text-fg-2">附二维码</text>
-          <uv-switch :model-value="withQr" size="20" :active-color="tokens.primary" @change="handleQrChange" />
-        </view>
-        <view class="flex items-center gap-2">
-          <text class="text-sm text-fg-2">显示姓名</text>
-          <uv-switch :model-value="showName" size="20" :active-color="tokens.primary" @change="handleShowNameChange" />
-        </view>
-        <view v-if="effectiveMode === 'term'" class="flex items-center gap-2">
-          <text class="text-sm text-fg-2">显示教师</text>
-          <uv-switch :model-value="showTeacher" size="20" :active-color="tokens.primary" @change="handleTeacherChange" />
-        </view>
-        <view v-if="canHideWeekend" class="flex items-center gap-2">
-          <text class="text-sm text-fg-2">隐藏周末</text>
-          <uv-switch :model-value="hideWeekend" size="20" :active-color="tokens.primary" @change="handleHideWeekendChange" />
+      <!-- 画进海报的内容：一排胶囊，选中即显示；胶囊高 60rpx，上下透明留白把点击区域撑到 88rpx -->
+      <view class="flex flex-wrap items-center gap-x-16rpx px-0.5">
+        <view
+          v-for="chip in optionChips"
+          :key="chip.key"
+          class="poster-chip py-14rpx"
+          :data-selected="chip.selected"
+          @click="toggleOption(chip.key)"
+        >
+          <view
+            class="h-60rpx flex items-center gap-1 rounded-full px-24rpx text-sm active:opacity-70"
+            :class="chip.selected ? 'bg-primary-light text-primary font-medium' : 'bg-card text-fg-2'"
+          >
+            <view v-if="chip.selected" class="i-carbon-checkmark text-base" />
+            <text>{{ chip.label }}</text>
+          </view>
         </view>
       </view>
 
