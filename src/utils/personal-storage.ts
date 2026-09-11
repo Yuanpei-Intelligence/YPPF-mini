@@ -1,6 +1,7 @@
 /**
  * Personal data kept on the phone: the home agenda and week-view caches, locally hidden events,
- * reminder state, the catalog row handed to the entry form and the remembered portal password.
+ * reminder state, the week grid's density, the catalog row handed to the entry form and the
+ * remembered portal password.
  * Every value lives under `<key>:<account>`, so another account on the same phone never reads it,
  * and `clearPersonalStorage()` (run on logout and unbind) removes the copies of every account.
  * Device preferences such as the poster theme or the show-hidden toggle stay global and do not
@@ -14,6 +15,8 @@ export const PERSONAL_STORAGE_KEYS = {
   hiddenIds: 'timetable_hidden_ids',
   reminder: 'timetable_reminder',
   catalogPick: 'timetable_catalog_pick',
+  /** Week-grid density (紧凑 / 宽松) */
+  density: 'timetable_density',
 } as const
 
 export type PersonalStorageKey = (typeof PERSONAL_STORAGE_KEYS)[keyof typeof PERSONAL_STORAGE_KEYS]

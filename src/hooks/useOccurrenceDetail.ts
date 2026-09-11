@@ -84,14 +84,19 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
     }
   }
 
-  function openDetail(occurrence: Occurrence) {
+  /** Show `occurrence` in the sheet without reopening it (the week grid's overlap switcher) */
+  function selectDetail(occurrence: Occurrence) {
     detail.value = occurrence
     entry.value = null
     entryError.value = ''
     entrySeq++
     entryLoading.value = false
-    sheet.value?.open()
     void loadEntry(occurrence)
+  }
+
+  function openDetail(occurrence: Occurrence) {
+    selectDetail(occurrence)
+    sheet.value?.open()
   }
 
   function closeDetail() {
@@ -262,6 +267,7 @@ export function useOccurrenceDetail(sheet: Ref<DetailSheetInstance | null>, opti
     isHidden,
     reloadLocalPrefs,
     openDetail,
+    selectDetail,
     closeDetail,
     handleDetailAction,
     handleDetailEdit,

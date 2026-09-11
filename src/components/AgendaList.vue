@@ -9,6 +9,7 @@ import {
   calendarLabelClass,
   clockOf,
   colorForOccurrence,
+  displayEndClock,
   KIND_BADGES,
   STATUS_LABELS,
   suspendsClasses,
@@ -112,7 +113,7 @@ function toRow(occurrence: Occurrence): AgendaRow {
   return {
     occurrence,
     start: clockOf(occurrence.start),
-    end: clockOf(occurrence.end),
+    end: displayEndClock(occurrence),
     pipStyle: `background-color: ${color.fg}`,
     badge: KIND_BADGES[occurrence.kind] ?? '',
     badgeStyle: `background-color: ${color.bg}; color: ${color.fg}`,
