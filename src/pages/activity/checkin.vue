@@ -1,44 +1,49 @@
 <script lang="ts" setup>
-import type { IActivityDetail } from '@/api/types/activity'
+import type { ActivityStatus, IActivityDetail } from '@/api/types/activity'
+import type { StatusTagType } from '@/components/StatusTag.vue'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import { checkInActivity, getActivityInfo } from '@/api/activity'
+import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
+import { formatDateTimeRange } from '@/utils/format'
 
 definePage({
   style: {
-    navigationStyle: 'custom',
     navigationBarTitleText: '活动签到',
   },
 })
 
-const activityId = ref<number>(-1)
+interface CheckInResult {
+  ok: boolean
+  title: string
+  message: string
+}
+
+const activityId = ref(-1)
 const activity = ref<IActivityDetail | null>(null)
 const loading = ref(true)
 const loadError = ref('')
-const checkIning = ref(false)
-const checkInSuccess = ref(false)
+const checkingIn = ref(false)
+// 签到结果页：成功 / 失败 / 已签到过，都用整页结果而不是 toast
+const result = ref<CheckInResult | null>(null)
 const toastRef = ref<UvToastInstance | null>(null)
-const { handleApiException, showMessage } = useApiException(toastRef)
+const { handleApiException } = useApiException(toastRef)
 
 function hasValidActivityId() {
   return Number.isInteger(activityId.value) && activityId.value > 0
 }
 
-// 格式化时间显示
-function formatDateTime(dateTimeStr: string) {
-  if (!dateTimeStr)
-    return ''
-  try {
-    const date = new Date(dateTimeStr)
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    const hours = String(date.getHours()).padStart(2, '0')
-    const minutes = String(date.getMinutes()).padStart(2, '0')
-    return `${month}-${day} ${hours}:${minutes}`
-  }
-  catch {
-    return dateTimeStr
-  }
+function activityStatusType(status: ActivityStatus): StatusTagType {
+  if (status === '报名中' || status === '进行中')
+    return 'success'
+  if (status === '等待中' || status === '待发布')
+    return 'processing'
+  if (status === '审核中')
+    return 'warning'
+  if (status === '已取消' || status === '已撤销' || status === '未过审')
+    return 'error'
+  return 'default'
 }
 
 async function fetchActivityInfo() {
@@ -48,7 +53,8 @@ async function fetchActivityInfo() {
   loadError.value = ''
   try {
     activity.value = await getActivityInfo(activityId.value)
-    checkInSuccess.value = activity.value.participation_status === '已参与'
+    if (activity.value.participation_status === '已参与')
+      result.value = { ok: true, title: '你已签到过', message: '无需重复签到' }
   }
   catch (error) {
     console.error('获取活动签到信息失败:', error)
@@ -61,141 +67,152 @@ async function fetchActivityInfo() {
 }
 
 async function handleCheckIn() {
-  if (!hasValidActivityId()) {
-    showMessage('活动参数错误。', 'warning')
+  if (!hasValidActivityId() || checkingIn.value || result.value?.ok)
     return
-  }
-  // 不允许点着玩
-  if (checkIning.value || checkInSuccess.value)
-    return
-  checkIning.value = true
+  checkingIn.value = true
   try {
     const res = await checkInActivity(activityId.value)
-    checkInSuccess.value = true
     if (activity.value)
       activity.value.participation_status = '已参与'
-    showMessage(res.message || '签到成功。', 'success')
-    setTimeout(() => {
-      uni.redirectTo({ url: `/pages/activity/detail?id=${activityId.value}` })
-    }, 1000)
+    result.value = { ok: true, title: '签到成功', message: res.message || '' }
   }
   catch (error) {
-    console.error(error)
-    handleApiException(error)
+    console.error('签到失败:', error)
+    const requestError = handleApiException(error, { showToast: false })
+    result.value = { ok: false, title: '签到失败', message: requestError.message }
   }
   finally {
-    checkIning.value = false
+    checkingIn.value = false
   }
 }
 
-function goBack() {
-  uni.navigateBack()
+function retryCheckIn() {
+  result.value = null
+}
+
+function goDetail() {
+  uni.redirectTo({ url: `/pages/activity/detail?id=${activityId.value}` })
+}
+
+function goHome() {
+  uni.reLaunch({ url: '/pages/index/index' })
+}
+
+function onRetry() {
+  if (hasValidActivityId())
+    void fetchActivityInfo()
+  else
+    goHome()
 }
 
 onLoad((options) => {
-  if (options) {
-    // 支持 scene（扫码）和 id（直接跳转）两种方式
-    if (options.scene) {
-      const aidStr = options.scene.split('_')[1]
-      if (aidStr)
-        activityId.value = Number(aidStr)
-    }
-    if (options.id !== undefined && activityId.value === -1) {
-      activityId.value = Number(options.id)
-    }
+  // 支持 scene（扫码）和 id（直接跳转）两种方式
+  if (options?.scene) {
+    const aidStr = options.scene.split('_')[1]
+    if (aidStr)
+      activityId.value = Number(aidStr)
   }
+  if (options?.id !== undefined && activityId.value === -1)
+    activityId.value = Number(options.id)
+
   if (!hasValidActivityId()) {
     activityId.value = -1
     loading.value = false
-    loadError.value = '签到码无效，无法获取活动信息。'
+    loadError.value = '签到码无效，无法获取活动信息'
     return
   }
-  fetchActivityInfo()
+  void fetchActivityInfo()
 })
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-safe">
-    <uv-navbar
-      title="活动签到"
-      :safe-area-inset-top="true"
-      :placeholder="true"
-      left-icon="arrow-left"
-      @left-click="goBack"
-    />
+  <view class="yp-page">
     <uv-toast ref="toastRef" />
 
-    <!-- 加载状态 -->
-    <view v-if="loading" class="flex items-center justify-center py-20">
-      <uv-loading-icon mode="circle" />
-    </view>
+    <PageState
+      :loading="loading"
+      :error="loadError"
+      :retry-text="activityId === -1 ? '回到首页' : '重试'"
+      @retry="onRetry"
+    >
+      <!-- 结果页 -->
+      <view v-if="result" class="flex flex-col items-center px-4 pt-20 text-center">
+        <view class="text-120rpx" :class="result.ok ? 'i-carbon-checkmark-filled text-success' : 'i-carbon-close-filled text-error'" />
+        <text class="mt-4 block text-xl text-fg-1 font-semibold">{{ result.title }}</text>
+        <text v-if="result.message" class="mt-2 block text-sm text-fg-2">{{ result.message }}</text>
 
-    <!-- 参数错误或加载失败 -->
-    <view v-else-if="loadError" class="flex flex-col items-center justify-center px-8 py-20 text-center">
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button class="mt-4 rounded-lg bg-blue-500 px-6 py-2 text-white" @click="activityId === -1 ? goBack() : fetchActivityInfo()">
-        {{ activityId === -1 ? '返回' : '重试' }}
-      </button>
-    </view>
+        <view v-if="activity" class="mt-6 w-full yp-card-flat text-left">
+          <text class="block text-base text-fg-1 font-medium">{{ activity.title }}</text>
+          <text class="mt-1 block text-xs text-fg-3">{{ formatDateTimeRange(activity.start, activity.end) }}</text>
+          <text v-if="activity.location" class="mt-1 block text-xs text-fg-3">{{ activity.location }}</text>
+        </view>
 
-    <!-- 活动信息 -->
-    <view v-else-if="activity" class="px-4 pt-4" :class="activity.need_checkin ? 'pb-24' : 'pb-6'">
-      <view class="overflow-hidden rounded-xl bg-white shadow-sm">
-        <view class="p-4">
-          <view class="mb-2 flex items-center justify-between">
-            <text class="text-lg text-gray-900 font-bold">{{ activity.title }}</text>
-            <view
-              class="rounded-full px-2.5 py-1 text-xs font-medium"
-              :class="{
-                'bg-green-50 text-green-600': activity.status === '进行中' || activity.status === '报名中',
-                'bg-blue-50 text-blue-600': activity.status === '等待中' || activity.status === '待发布',
-                'bg-gray-100 text-gray-500': activity.status === '已结束',
-                'bg-red-50 text-red-500': activity.status === '已取消' || activity.status === '已撤销' || activity.status === '未过审',
-                'bg-yellow-50 text-yellow-600': activity.status === '审核中',
-              }"
-            >
-              {{ activity.status }}
+        <view class="mt-8 w-full">
+          <view v-if="result.ok" class="btn-primary btn-block" @click="goDetail">
+            查看活动
+          </view>
+          <template v-else>
+            <view class="btn-primary btn-block" @click="retryCheckIn">
+              重新签到
+            </view>
+            <view class="btn-ghost mt-2 btn-block" @click="goDetail">
+              查看活动
+            </view>
+          </template>
+        </view>
+      </view>
+
+      <!-- 签到前：活动摘要 -->
+      <view v-else-if="activity" class="px-4 py-3">
+        <view class="yp-card-flat">
+          <view class="flex items-start justify-between gap-2">
+            <text class="flex-1 text-lg text-fg-1 font-semibold">{{ activity.title }}</text>
+            <StatusTag :type="activityStatusType(activity.status)" :text="activity.status_display || activity.status" />
+          </view>
+          <view class="mt-4 flex flex-col gap-3">
+            <view class="flex items-start gap-3">
+              <view class="i-carbon-time mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <text class="block text-xs text-fg-3">时间</text>
+                <text class="block text-sm text-fg-1">{{ formatDateTimeRange(activity.start, activity.end) }}</text>
+              </view>
+            </view>
+            <view v-if="activity.location" class="flex items-start gap-3">
+              <view class="i-carbon-location mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <text class="block text-xs text-fg-3">地点</text>
+                <text class="block text-sm text-fg-1">{{ activity.location }}</text>
+              </view>
+            </view>
+            <view class="flex items-start gap-3">
+              <view class="i-carbon-group mt-1 shrink-0 text-fg-3" />
+              <view class="min-w-0 flex-1">
+                <text class="block text-xs text-fg-3">主办</text>
+                <text class="block text-sm text-fg-1">{{ activity.organization_name }}</text>
+              </view>
             </view>
           </view>
+        </view>
 
-          <view class="mb-2 flex items-center gap-2 text-sm text-gray-600">
-            <text class="i-carbon-user text-base text-gray-400" />
-            <text>{{ activity.organization_name }}</text>
-          </view>
+        <view v-if="!activity.need_checkin" class="mt-3 yp-card-flat">
+          <text class="block text-sm text-fg-2">本活动无需签到。</text>
+        </view>
 
-          <view class="mb-2 flex items-center gap-2 text-sm text-gray-600">
-            <text class="i-carbon-time text-base text-gray-400" />
-            <text>{{ formatDateTime(activity.start) }} ~ {{ formatDateTime(activity.end) }}</text>
-          </view>
+        <!-- 固定底栏占位 -->
+        <view class="h-160rpx pb-safe" />
+      </view>
+    </PageState>
 
-          <view v-if="activity.location" class="mb-2 flex items-center gap-2 text-sm text-gray-600">
-            <text class="i-carbon-location text-base text-gray-400" />
-            <text>{{ activity.location }}</text>
-          </view>
-
-          <view v-if="activity.introduction" class="mt-3 border-t border-gray-100 pt-3 text-sm text-gray-600 leading-relaxed">
-            {{ activity.introduction }}
-          </view>
+    <view v-if="!loading && !loadError && !result && activity?.need_checkin" class="fixed bottom-0 left-0 right-0 z-10 bg-card shadow-float pb-safe">
+      <view class="px-4 py-3">
+        <view
+          class="btn-primary btn-block"
+          :class="{ 'opacity-50': checkingIn }"
+          @click="handleCheckIn"
+        >
+          {{ checkingIn ? '签到中…' : '签到' }}
         </view>
       </view>
     </view>
-
-    <!-- 签到按钮 -->
-    <view v-if="activity?.need_checkin && !loading" class="fixed bottom-0 left-0 right-0 bg-white px-4 pt-3 pb-safe shadow-lg">
-      <button
-        class="w-full rounded-lg py-3 text-base font-medium"
-        :class="checkInSuccess ? 'bg-gray-300 text-gray-500' : (checkIning ? 'bg-gray-300 text-gray-500' : 'bg-blue-500 text-white')"
-        :disabled="checkIning || checkInSuccess"
-        @click="handleCheckIn"
-      >
-        {{ checkInSuccess ? '已签到' : (checkIning ? '签到中...' : '签到') }}
-      </button>
-    </view>
   </view>
 </template>
-
-<style lang="scss" scoped>
-.pb-safe {
-  padding-bottom: env(safe-area-inset-bottom);
-}
-</style>

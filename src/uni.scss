@@ -1,96 +1,166 @@
 /* stylelint-disable comment-empty-line-before */
 /**
- * 这里是uni-app内置的常用样式变量
+ * Global SCSS variables. This file is injected into EVERY component's <style lang="scss">,
+ * so it must contain variables only — no selectors, no CSS output.
  *
- * uni-app 官方扩展插件及插件市场（https://ext.dcloud.net.cn）上很多三方插件均使用了这些样式变量
- * 如果你是插件开发者，建议你使用scss预处理，并在插件代码中直接使用这些变量（无需 import 这个文件），方便用户通过搭积木的方式开发整体风格一致的App
- *
+ * Three layers share the same values (see docs/design/README.md §2):
+ *   1. `$yp-*`   SCSS tokens (this file)             → compile-time use in <style>
+ *   2. `--yp-*`  CSS variables on `page`             → src/style/index.scss, runtime use
+ *   3. `tokens`  JS mirror                            → src/style/tokens.ts, component props
+ * Change a value in all three places.
  */
 
-/**
- * 如果你是App开发者（插件使用者），你可以通过修改这些变量来定制自己的插件主题，实现自定义主题功能
- *
- * 如果你的项目同样使用了scss预处理，你也可以直接在你的 scss 代码中使用如下变量，同时无需 import 这个文件
- */
+/* ---- YPPF design tokens ---------------------------------------------------- */
 
-/* 颜色变量 */
+/* Interaction & semantic colors (scheme A「学术蓝 + 北大红点缀」, contrast-checked ≥ 4.5:1 for text) */
+$yp-color-primary: #2456c9; // buttons, selection, links, tabbar active
+$yp-color-primary-dark: #1a43a3; // pressed state; "processing" tag text
+$yp-color-primary-light: #e9effc; // secondary button bg, "processing" tag bg, today column
+$yp-color-primary-disabled: #a3b7e9;
 
-/* 行为相关颜色 */
-$uni-color-primary: #2563eb;
-$uni-color-success: #4cd964;
-$uni-color-warning: #f0ad4e;
-$uni-color-error: #ef4444;
+$yp-color-success: #15803d;
+$yp-color-success-dark: #166534;
+$yp-color-success-light: #e8f8ee;
+$yp-color-warning: #b45309;
+$yp-color-warning-dark: #92400e;
+$yp-color-warning-light: #fff4e0;
+$yp-color-error: #cf2222;
+$yp-color-error-dark: #a81b1b;
+$yp-color-error-light: #fdecec;
+$yp-color-info: #5b6b82;
+$yp-color-info-dark: #475569;
+$yp-color-info-light: #eff2f6;
 
-/* 自定义主题色板 */
-$theme-primary: $uni-color-primary;
-$theme-primary-light: #dbeafe;
-$theme-primary-dark: #1d4ed8;
-$theme-bg-soft: #f9fafb;
-$theme-border-color: #f3f4f6;
-$theme-text-main: #1f2937;
-$theme-text-sub: #6b7280;
+/* Brand identity (北大红 + 元培米色). Identity only: logo, brand wordmark, 元气值 display numbers,
+ * brand banners. Never used for buttons, status tags, forms or errors (it shares the hue of error). */
+$yp-color-brand: #9a0000;
+$yp-color-brand-light: #f9f2e8;
 
-:root {
-  --primary-color: #{$theme-primary};
-  --primary-light: #{$theme-primary-light};
-  --primary-dark: #{$theme-primary-dark};
-  --bg-soft: #{$theme-bg-soft};
-  --border-color: #{$theme-border-color};
-  --text-main: #{$theme-text-main};
-  --text-sub: #{$theme-text-sub};
-}
+/* Text */
+$yp-text-1: #1f2329; // titles, body
+$yp-text-2: #4e5969; // secondary
+$yp-text-3: #666e7a; // tertiary, captions, placeholders (4.5:1 on page bg)
+$yp-text-4: #c9cdd4; // disabled, decorative icons
+$yp-text-inverse: #ffffff;
 
-/* 文字基本颜色 */
-$uni-text-color: #333; // 基本色
-$uni-text-color-inverse: #fff; // 反色
-$uni-text-color-grey: #999; // 辅助灰色，如加载更多的提示信息
-$uni-text-color-placeholder: #808080;
-$uni-text-color-disable: #c0c0c0;
+/* Backgrounds & borders */
+$yp-bg-page: #f5f6f8;
+$yp-bg-card: #ffffff;
+$yp-bg-fill: #f2f3f5;
+$yp-bg-fill-active: #e5e6eb;
+$yp-mask: rgba(0, 0, 0, 0.45);
+$yp-border: #e5e6eb;
+$yp-border-light: #f2f3f5;
 
-/* 背景颜色 */
-$uni-bg-color: #fff;
-$uni-bg-color-grey: #f8f8f8;
-$uni-bg-color-hover: #f1f1f1; // 点击状态颜色
-$uni-bg-color-mask: rgb(0 0 0 / 40%); // 遮罩颜色
+/* Radius */
+$yp-radius-sm: 8rpx;
+$yp-radius-md: 16rpx;
+$yp-radius-lg: 24rpx;
+$yp-radius-xl: 32rpx;
 
-/* 边框颜色 */
-$uni-border-color: #c8c7cc;
+/* Typography (rpx; 2rpx ≈ 1pt on a 375pt screen) */
+$yp-font-xs: 24rpx; // 12pt captions, tags
+$yp-font-sm: 28rpx; // 14pt secondary text
+$yp-font-base: 30rpx; // 15pt body
+$yp-font-lg: 34rpx; // 17pt titles, list primary text
+$yp-font-xl: 40rpx; // 20pt page headings
+$yp-font-2xl: 48rpx; // 24pt display numbers
+$yp-font-family:
+  -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 
-/* 尺寸变量 */
+/* Spacing */
+$yp-space-gutter: 32rpx; // page side padding
+$yp-space-card: 32rpx; // card inner padding
+$yp-space-section: 24rpx; // gap between cards
 
-/* 文字尺寸 */
+/* Shadows */
+$yp-shadow-card: 0 2rpx 12rpx rgba(31, 35, 41, 0.06);
+$yp-shadow-float: 0 8rpx 24rpx rgba(31, 35, 41, 0.12);
+
+/* ---- uv-ui theme bridge ---------------------------------------------------- */
+/* uv-ui reads these `$uv-*` variables (declared `!default` in uv-ui-tools/libs/css/color.scss)
+ * and only substitutes them textually (no SCSS color math anywhere in the library), so they
+ * can point at the runtime CSS variables. That keeps uv components in sync with any future
+ * theme switch (e.g. dark mode) without a rebuild. JS-side colors (uv-loading-icon,
+ * uv-tabs line-color, …) cannot take `var()`; pass `tokens.*` from src/style/tokens.ts. */
+$uv-main-color: var(--yp-text-1);
+$uv-content-color: var(--yp-text-2);
+$uv-tips-color: var(--yp-text-3);
+$uv-light-color: var(--yp-text-4);
+$uv-border-color: var(--yp-border);
+$uv-bg-color: var(--yp-bg-page);
+$uv-disabled-color: var(--yp-text-4);
+
+$uv-primary: var(--yp-color-primary);
+$uv-primary-dark: var(--yp-color-primary-dark);
+$uv-primary-disabled: var(--yp-color-primary-disabled);
+$uv-primary-light: var(--yp-color-primary-light);
+
+$uv-warning: var(--yp-color-warning);
+$uv-warning-dark: var(--yp-color-warning-dark);
+$uv-warning-disabled: #f3c98a;
+$uv-warning-light: var(--yp-color-warning-light);
+
+$uv-success: var(--yp-color-success);
+$uv-success-dark: var(--yp-color-success-dark);
+$uv-success-disabled: #9ad9ac;
+$uv-success-light: var(--yp-color-success-light);
+
+$uv-error: var(--yp-color-error);
+$uv-error-dark: var(--yp-color-error-dark);
+$uv-error-disabled: #f1a3a3;
+$uv-error-light: var(--yp-color-error-light);
+
+$uv-info: var(--yp-color-info);
+$uv-info-dark: var(--yp-color-info-dark);
+$uv-info-disabled: #b6c0cc;
+$uv-info-light: var(--yp-color-info-light);
+
+/* ---- uni-app built-in variables (kept for third-party plugins) ------------- */
+$uni-color-primary: $yp-color-primary;
+$uni-color-success: $yp-color-success;
+$uni-color-warning: $yp-color-warning;
+$uni-color-error: $yp-color-error;
+
+$uni-text-color: $yp-text-1;
+$uni-text-color-inverse: $yp-text-inverse;
+$uni-text-color-grey: $yp-text-3;
+$uni-text-color-placeholder: $yp-text-3;
+$uni-text-color-disable: $yp-text-4;
+
+$uni-bg-color: $yp-bg-card;
+$uni-bg-color-grey: $yp-bg-page;
+$uni-bg-color-hover: $yp-bg-fill-active;
+$uni-bg-color-mask: $yp-mask;
+
+$uni-border-color: $yp-border;
+
 $uni-font-size-sm: 12px;
 $uni-font-size-base: 14px;
-$uni-font-size-lg: 16;
+$uni-font-size-lg: 16px;
 
-/* 图片尺寸 */
 $uni-img-size-sm: 20px;
 $uni-img-size-base: 26px;
 $uni-img-size-lg: 40px;
 
-/* Border Radius */
 $uni-border-radius-sm: 2px;
 $uni-border-radius-base: 3px;
 $uni-border-radius-lg: 6px;
 $uni-border-radius-circle: 50%;
 
-/* 水平间距 */
 $uni-spacing-row-sm: 5px;
 $uni-spacing-row-base: 10px;
 $uni-spacing-row-lg: 15px;
 
-/* 垂直间距 */
 $uni-spacing-col-sm: 4px;
 $uni-spacing-col-base: 8px;
 $uni-spacing-col-lg: 12px;
 
-/* 透明度 */
-$uni-opacity-disabled: 0.3; // 组件禁用态的透明度
+$uni-opacity-disabled: 0.3;
 
-/* 文章场景相关 */
-$uni-color-title: #2c405a; // 文章标题颜色
+$uni-color-title: $yp-text-1;
 $uni-font-size-title: 20px;
-$uni-color-subtitle: #555; // 二级标题颜色
+$uni-color-subtitle: $yp-text-2;
 $uni-font-size-subtitle: 18px;
-$uni-color-paragraph: #3f536e; // 文章段落颜色
+$uni-color-paragraph: $yp-text-2;
 $uni-font-size-paragraph: 15px;

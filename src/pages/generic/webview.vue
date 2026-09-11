@@ -1,6 +1,9 @@
 <script lang="ts" setup>
 import type { UvToastInstance } from '@/hooks/useApiException'
+import { onLoad } from '@dcloudio/uni-app'
+import { computed, ref } from 'vue'
 import { getTicket } from '@/api/login'
+import PageState from '@/components/PageState.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { toBackendURL } from '@/utils'
 
@@ -14,11 +17,12 @@ const uri = ref('/')
 const ticket = ref('')
 const isPublic = ref(false)
 const loading = ref(true)
-const loadFailed = ref(false)
+/** 换 ticket 失败的页内错误（只此一个提示面，可重试） */
+const loadError = ref('')
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException } = useApiException(toastRef)
 const url = computed(() => {
-  if (loading.value || loadFailed.value)
+  if (loading.value || loadError.value)
     return ''
   if (isPublic.value)
     return toBackendURL(uri.value)
@@ -36,30 +40,30 @@ async function ensureTicketReady() {
   }
   catch (err) {
     console.error(err)
-    handleApiException(err)
-    loadFailed.value = true
+    loadError.value = handleApiException(err, { showToast: false }).message
     return false
   }
 }
 
-onLoad(async (options) => {
-  uri.value = decodeURIComponent(options.uri || '/')
-  isPublic.value = options.public === '1' || options.public === 'true'
-  ticket.value = options.ticket ? decodeURIComponent(options.ticket) : ''
+async function load() {
   loading.value = true
-  loadFailed.value = false
-
+  loadError.value = ''
   await ensureTicketReady()
   loading.value = false
+}
+
+onLoad(async (options) => {
+  uri.value = decodeURIComponent(options?.uri || '/')
+  isPublic.value = options?.public === '1' || options?.public === 'true'
+  ticket.value = options?.ticket ? decodeURIComponent(options.ticket) : ''
+  await load()
 })
 </script>
 
 <template>
-  <view class="h-full w-full">
+  <view class="yp-page">
     <uv-toast ref="toastRef" />
     <web-view v-if="url" :src="url" />
-    <view v-else class="h-full w-full flex items-center justify-center text-sm text-gray-500">
-      <text>{{ loadFailed ? '页面加载失败' : '页面加载中...' }}</text>
-    </view>
+    <PageState v-else :loading="loading" :error="loadError" loading-text="页面加载中…" @retry="load" />
   </view>
 </template>

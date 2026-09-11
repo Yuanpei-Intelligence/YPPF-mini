@@ -1,21 +1,31 @@
 <script lang="ts" setup>
-import type { IArrangeTimeResponse, ITimeSection } from '@/api/types/appoint'
+import type { IArrangeTimeResponse, IDayRange, ITimeSection } from '@/api/types/appoint'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import { getArrangeByRoom } from '@/api/appoint'
+import PageState from '@/components/PageState.vue'
 import { useApiException } from '@/hooks/useApiException'
+import { formatDateTimeRange, formatSmartDateTime, weekdayLabel } from '@/utils/format'
 
 definePage({
   style: {
-    navigationStyle: 'custom',
-    navigationBarTitleText: '预约房间',
+    navigationBarTitleText: '选择预约时段',
   },
 })
 
+interface UvPopupInstance {
+  open: (mode?: string) => void
+  close: () => void
+}
+
 const Rid = ref<string>('')
 const loading = ref(false)
+const loadError = ref<string | null>(null)
 const data = ref<IArrangeTimeResponse>()
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
+
+// 日期条当前展示的日期索引
+const activeDayIndex = ref(0)
 
 // 选中的日期索引（用于记录选中的是哪一天）
 const selectedDayIndex = ref<number | null>(null)
@@ -24,23 +34,49 @@ const selectedDayIndex = ref<number | null>(null)
 const selectedStartId = ref<number | null>(null)
 const selectedEndId = ref<number | null>(null)
 
-// 当前选中日期的时间段列表
-const currentTimeSections = computed(() => {
-  if (selectedDayIndex.value === null || !data.value?.dayrange_list?.length)
-    return []
-  return data.value.dayrange_list[selectedDayIndex.value]?.timesection || []
+const dayList = computed(() => data.value?.dayrange_list || [])
+
+// 当前展示日期的时间段列表
+const activeTimeSections = computed(() => {
+  return dayList.value[activeDayIndex.value]?.timesection || []
 })
 
 // 当前选中的日期信息
 const currentDay = computed(() => {
-  if (selectedDayIndex.value === null || !data.value?.dayrange_list?.length)
+  if (selectedDayIndex.value === null || !dayList.value.length)
     return null
-  return data.value.dayrange_list[selectedDayIndex.value]
+  return dayList.value[selectedDayIndex.value] ?? null
 })
+
+function dayToDate(day: IDayRange, time?: string): Date {
+  const [hh, mm] = (time ?? '00:00').split(':').map(Number)
+  return new Date(day.year, day.month - 1, day.day, hh || 0, mm || 0)
+}
+
+function isToday(day: IDayRange): boolean {
+  const now = new Date()
+  return day.year === now.getFullYear() && day.month === now.getMonth() + 1 && day.day === now.getDate()
+}
+
+// 日期条上方的文字：今天 / 周五
+function dayChipLabel(day: IDayRange): string {
+  return isToday(day) ? '今天' : weekdayLabel(dayToDate(day))
+}
 
 // 判断时间段是否可选（status === 0 表示可用）
 function isTimeAvailable(section: ITimeSection): boolean {
   return section.status === 0
+}
+
+// 不可选时段的短标签：1 已过 / 2 已约 / 3 长期预约占用
+function slotLabel(section: ITimeSection): string {
+  switch (section.status) {
+    case 0: return ''
+    case 1: return '已过'
+    case 2: return '已约'
+    case 3: return '长期'
+    default: return '不可约'
+  }
 }
 
 // 判断时间段是否被选中（需要考虑日期）
@@ -52,7 +88,7 @@ function isTimeSelected(dayIndex: number, section: ITimeSection): boolean {
   if (selectedEndId.value === null)
     return section.id === selectedStartId.value
 
-  const daySections = data.value?.dayrange_list[dayIndex]?.timesection || []
+  const daySections = dayList.value[dayIndex]?.timesection || []
   const startIdx = daySections.findIndex(s => s.id === selectedStartId.value)
   const endIdx = daySections.findIndex(s => s.id === selectedEndId.value)
   const currentIdx = daySections.findIndex(s => s.id === section.id)
@@ -80,7 +116,7 @@ function onTimeClick(dayIndex: number, section: ITimeSection) {
   if (!isTimeAvailable(section))
     return
 
-  const daySections = data.value?.dayrange_list[dayIndex]?.timesection || []
+  const daySections = dayList.value[dayIndex]?.timesection || []
 
   // 如果没有选中起始时间，设置为起始时间
   if (selectedStartId.value === null) {
@@ -125,7 +161,7 @@ function onTimeClick(dayIndex: number, section: ITimeSection) {
       .some(s => !isTimeAvailable(s))
 
     if (hasUnavailable) {
-      showMessage('选择范围内有不可用时段。', 'warning')
+      showMessage('选择范围内有不可用时段', 'warning')
       return
     }
 
@@ -133,11 +169,11 @@ function onTimeClick(dayIndex: number, section: ITimeSection) {
     // 比如start=1, end=2, 时长为2 - 1 = 1*30mins
     if (!data.value?.has_longterm_permission) {
       const selectedCount = maxIdx - minIdx
-      const dayInfo = data.value?.dayrange_list[dayIndex]
+      const dayInfo = dayList.value[dayIndex]
       const dayLimit = dayInfo?.weekday ? data.value?.available_hours?.[dayInfo.weekday] : null
       const maxLimit = dayLimit ?? data.value?.max_appoint_time
       if (maxLimit && selectedCount > maxLimit) {
-        showMessage(`该天最多可预约 ${maxLimit / 2} 小时。`, 'warning')
+        showMessage(`该天最多可预约 ${maxLimit / 2} 小时`, 'warning')
         return
       }
     }
@@ -152,35 +188,56 @@ function onTimeClick(dayIndex: number, section: ITimeSection) {
   selectedEndId.value = null
 }
 
-// 获取选中的时间范围文字
-const selectedTimeRange = computed(() => {
+// 选中区间的实际起止时间段（按 id 顺序归一化）
+const selectedBounds = computed(() => {
   if (selectedStartId.value === null || selectedDayIndex.value === null)
-    return ''
-
-  const daySections = data.value?.dayrange_list[selectedDayIndex.value]?.timesection || []
-  const startSection = daySections.find(s => s.id === selectedStartId.value)
-  if (!startSection)
-    return ''
-
-  if (selectedEndId.value === null) {
-    return `${startSection.starttime} 起`
-  }
-
-  const endSection = daySections.find(s => s.id === selectedEndId.value)
-  if (!endSection)
-    return ''
-
-  // 计算实际的开始和结束时间
+    return null
+  const daySections = dayList.value[selectedDayIndex.value]?.timesection || []
   const startIdx = daySections.findIndex(s => s.id === selectedStartId.value)
+  if (startIdx < 0)
+    return null
+  if (selectedEndId.value === null)
+    return { start: daySections[startIdx], end: null, slots: 0 }
   const endIdx = daySections.findIndex(s => s.id === selectedEndId.value)
-  const actualStartIdx = Math.min(startIdx, endIdx)
-  const actualEndIdx = Math.max(startIdx, endIdx)
-
-  const actualStart = daySections[actualStartIdx]
-  const actualEnd = daySections[actualEndIdx]
-
-  return `${actualStart.starttime} - ${actualEnd.starttime}`
+  if (endIdx < 0)
+    return null
+  const minIdx = Math.min(startIdx, endIdx)
+  const maxIdx = Math.max(startIdx, endIdx)
+  return { start: daySections[minIdx], end: daySections[maxIdx], slots: maxIdx - minIdx }
 })
+
+// 传给 checkout 的时间范围文字（保持原有 query 格式）
+const selectedTimeRange = computed(() => {
+  const bounds = selectedBounds.value
+  if (!bounds)
+    return ''
+  if (!bounds.end)
+    return `${bounds.start.starttime} 起`
+  return `${bounds.start.starttime} - ${bounds.end.starttime}`
+})
+
+// 底部栏摘要：「今天 14:00–15:30」「1.5 小时」
+const summaryText = computed(() => {
+  const bounds = selectedBounds.value
+  const day = currentDay.value
+  if (!bounds || !day)
+    return ''
+  if (!bounds.end)
+    return `${formatSmartDateTime(dayToDate(day), false)} ${bounds.start.starttime} 起，请选择结束时间`
+  return formatDateTimeRange(dayToDate(day, bounds.start.starttime), dayToDate(day, bounds.end.starttime))
+})
+
+const durationText = computed(() => {
+  const slots = selectedBounds.value?.slots ?? 0
+  return slots > 0 ? formatDurationText(slots * 30) : ''
+})
+
+function formatDurationText(minutes: number): string {
+  if (minutes < 60)
+    return `${minutes} 分钟`
+  const hours = minutes / 60
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} 小时`
+}
 
 // 是否可以提交
 const canSubmit = computed(() => {
@@ -188,39 +245,24 @@ const canSubmit = computed(() => {
 })
 
 // 预约须知弹窗
-const noticePopupRef = ref()
+const noticePopupRef = ref<UvPopupInstance | null>(null)
 
 function openNoticePopup() {
-  noticePopupRef.value?.open('center')
+  noticePopupRef.value?.open()
 }
 
 function closeNoticePopup() {
   noticePopupRef.value?.close()
 }
 
-// 返回上一页
-function goBack() {
-  uni.navigateBack()
-}
-
 // 前往 checkout 页面
 function goToCheckout() {
-  if (!canSubmit.value || !currentDay.value || selectedDayIndex.value === null)
+  const bounds = selectedBounds.value
+  if (!canSubmit.value || !currentDay.value || !bounds?.end)
     return
 
-  const daySections = data.value?.dayrange_list[selectedDayIndex.value]?.timesection || []
-
-  // 计算实际的开始和结束 id
-  const startIdx = daySections.findIndex(s => s.id === selectedStartId.value)
-  const endIdx = daySections.findIndex(s => s.id === selectedEndId.value)
-  const actualStartIdx = Math.min(startIdx, endIdx)
-  const actualEndIdx = Math.max(startIdx, endIdx)
-
-  const startid = daySections[actualStartIdx].id
-  const endid = daySections[actualEndIdx].id
-
   uni.navigateTo({
-    url: `/pages/appoint/checkout?Rid=${Rid.value}&startid=${startid}&endid=${endid}&weekday=${currentDay.value.weekday}&timestr=${selectedTimeRange.value}`,
+    url: `/pages/appoint/checkout?Rid=${Rid.value}&startid=${bounds.start.id}&endid=${bounds.end.id}&weekday=${currentDay.value.weekday}&timestr=${selectedTimeRange.value}`,
   })
 }
 
@@ -236,11 +278,11 @@ async function fetchData() {
   try {
     const res = await getArrangeByRoom({ Rid: Rid.value })
     data.value = res
-    console.log(data.value)
+    loadError.value = null
   }
   catch (error) {
-    console.error(error)
-    handleApiException(error)
+    // 首屏失败只显示页内错误 + 重试，不再 toast
+    loadError.value = handleApiException(error, { showToast: false }).message
   }
   finally {
     loading.value = false
@@ -255,181 +297,142 @@ function openAgreement() {
 </script>
 
 <template>
-  <!-- 自定义导航栏 -->
-  <uv-navbar
-    title="选择预约时段"
-    :safe-area-inset-top="true"
-    :placeholder="true"
-    left-icon="arrow-left"
-    @left-click="goBack"
-  />
   <uv-toast ref="toastRef" />
 
-  <!-- 加载状态 -->
-  <view v-if="loading" class="flex items-center justify-center py-20">
-    <uv-loading-icon mode="circle" />
-  </view>
-
-  <view v-else-if="data" class="min-h-screen bg-gray-50 pb-safe">
-    <!-- 房间信息卡片 -->
-    <view class="mx-3 mt-3 rounded-lg bg-white p-4 shadow-sm">
-      <view class="text-lg text-gray-800 font-bold">
-        {{ data.room.Rtitle }}
-      </view>
-      <view class="mt-1 text-sm text-gray-500">
-        {{ data.room.Rid }} · {{ data.room.Rmin }}-{{ data.room.Rmax }}人
-      </view>
-      <view class="mt-1 text-sm text-gray-500">
-        开放时间：{{ data.room.Rstart }} - {{ data.room.Rfinish }}
-      </view>
-    </view>
-
-    <!-- 选择提示 -->
-    <view class="mx-3 mt-3 flex items-center justify-between text-sm">
-      <view class="text-gray-500">
-        <text>轻触选择，点击开始时间可取消选择</text>
-      </view>
-      <view class="text-blue-500" @click="openNoticePopup">
-        <text>预约须知</text>
-      </view>
-    </view>
-
-    <!-- 图例说明 -->
-    <view class="mx-3 mt-2 flex items-center gap-4 text-xs text-gray-500">
-      <view class="flex items-center gap-1">
-        <view class="h-3 w-3 border border-gray-200 rounded bg-white" />
-        <text>可选</text>
-      </view>
-      <view class="flex items-center gap-1">
-        <view class="h-3 w-3 rounded bg-blue-500" />
-        <text>已选</text>
-      </view>
-      <view class="flex items-center gap-1">
-        <view class="h-3 w-3 rounded bg-gray-200" />
-        <text>不可选</text>
-      </view>
-    </view>
-
-    <!-- 时间段表格（每天一列，横向滚动） -->
-    <scroll-view scroll-x class="mt-3" :show-scrollbar="false">
-      <view class="flex gap-2 px-3 pb-32">
-        <!-- 每一天为一列 -->
-        <view
-          v-for="(day, dayIndex) in data.dayrange_list"
-          :key="dayIndex"
-          class="flex flex-shrink-0 flex-col"
-          :style="{ width: '80px' }"
-        >
-          <!-- 日期标题（固定在顶部） -->
-          <view
-            class="sticky top-0 z-10 mb-2 rounded-lg py-2 text-center"
-            :class="selectedDayIndex === dayIndex ? 'bg-blue-500 text-white' : 'bg-white text-gray-700 shadow-sm'"
-          >
-            <text class="text-sm font-medium">{{ day.weekday }}</text>
-            <view class="text-xs" :class="selectedDayIndex === dayIndex ? 'text-blue-100' : 'text-gray-400'">
-              {{ day.month }}/{{ day.day }}
+  <PageState :loading="loading && !data" :error="loadError" :empty="!loading && !loadError && !!data && dayList.length === 0" empty-text="还没有可预约的时段" @retry="fetchData">
+    <view v-if="data" class="yp-page px-4 py-3 pb-40">
+      <!-- 房间信息卡片 -->
+      <view class="yp-card-flat">
+        <view class="flex items-center justify-between gap-2">
+          <view class="min-w-0 flex-1">
+            <view class="text-lg text-fg-1 font-semibold">
+              {{ data.room.Rtitle }}
+            </view>
+            <view class="mt-0.5 text-sm text-fg-2">
+              {{ data.room.Rid }} · {{ data.room.Rmin }}–{{ data.room.Rmax }} 人 · 开放 {{ data.room.Rstart.slice(0, 5) }}–{{ data.room.Rfinish.slice(0, 5) }}
             </view>
           </view>
-
-          <!-- 该天的时间段列表 -->
-          <view class="flex flex-col gap-1.5">
-            <view
-              v-for="section in day.timesection"
-              :key="section.id"
-              class="relative flex items-center justify-center border rounded-lg py-2.5 transition-all"
-              :class="[
-                isTimeAvailable(section)
-                  ? isTimeSelected(dayIndex, section)
-                    ? 'border-blue-500 bg-blue-500 text-white'
-                    : 'border-gray-200 bg-white text-gray-700 active:bg-gray-50'
-                  : 'border-gray-100 bg-gray-200 text-gray-400',
-              ]"
-              @click="onTimeClick(dayIndex, section)"
-            >
-              <!-- 起始标记 -->
-              <view
-                v-if="isStartTime(dayIndex, section)"
-                class="absolute left-1 top-0.5 text-xs"
-                :class="isTimeSelected(dayIndex, section) ? 'text-blue-200' : 'text-blue-500'"
-              >
-                起
-              </view>
-              <!-- 结束标记 -->
-              <view
-                v-if="isEndTime(dayIndex, section)"
-                class="absolute right-1 top-0.5 text-xs"
-                :class="isTimeSelected(dayIndex, section) ? 'text-blue-200' : 'text-blue-500'"
-              >
-                止
-              </view>
-
-              <!-- 时间显示 -->
-              <text class="text-sm font-medium">{{ section.starttime }}</text>
-            </view>
+          <view class="btn-text shrink-0" @click="openNoticePopup">
+            预约须知
           </view>
         </view>
       </view>
-    </scroll-view>
 
-    <!-- 底部确认按钮 -->
-    <view class="fixed bottom-0 left-0 right-0 bg-white px-4 pt-3 pb-safe shadow-lg">
-      <view class="mb-2 text-center text-sm text-gray-600">
-        <text v-if="selectedTimeRange">{{ currentDay?.weekday }} {{ selectedTimeRange }}</text>
-        <text v-else class="text-gray-400">请选择预约时段</text>
+      <!-- 日期条 -->
+      <scroll-view scroll-x class="mt-3 w-full" :show-scrollbar="false">
+        <view class="flex gap-2">
+          <view
+            v-for="(day, dayIndex) in dayList"
+            :key="dayIndex"
+            class="relative h-112rpx w-124rpx flex shrink-0 flex-col items-center justify-center rounded-md"
+            :class="activeDayIndex === dayIndex ? 'bg-primary text-white' : 'bg-fill text-fg-1 active:bg-fill-active'"
+            @click="activeDayIndex = dayIndex"
+          >
+            <text class="text-xs" :class="activeDayIndex === dayIndex ? 'text-white' : 'text-fg-3'">
+              {{ dayChipLabel(day) }}
+            </text>
+            <text class="mt-0.5 text-base font-medium">{{ day.month }}/{{ day.day }}</text>
+            <!-- 已选时段在其它日期时的提示点 -->
+            <view
+              v-if="selectedDayIndex === dayIndex && activeDayIndex !== dayIndex"
+              class="absolute right-2 top-2 h-10rpx w-10rpx rounded-full bg-primary"
+            />
+          </view>
+        </view>
+      </scroll-view>
+
+      <!-- 说明 -->
+      <view class="mt-3 text-xs text-fg-3">
+        先点开始时间，再点结束时间；再次点开始时间可取消
       </view>
-      <button
-        class="w-full rounded-lg py-3 text-base font-medium"
-        :class="canSubmit ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-400'"
-        :disabled="!canSubmit"
-        @click="goToCheckout"
-      >
-        确认选择
+
+      <!-- 时段网格 -->
+      <view class="grid grid-cols-4 mt-2 gap-2">
+        <view
+          v-for="section in activeTimeSections"
+          :key="section.id"
+          class="relative h-96rpx flex flex-col items-center justify-center border rounded-md text-sm"
+          :class="[
+            isTimeAvailable(section)
+              ? isTimeSelected(activeDayIndex, section)
+                ? 'border-primary bg-primary text-white font-medium'
+                : 'border-line bg-card text-fg-1 active:bg-fill'
+              : 'border-line-light bg-fill text-fg-4',
+          ]"
+          @click="onTimeClick(activeDayIndex, section)"
+        >
+          <!-- 起始 / 结束标记 -->
+          <text
+            v-if="isStartTime(activeDayIndex, section)"
+            class="absolute left-1 top-0 text-2xs text-white"
+          >
+            起
+          </text>
+          <text
+            v-if="isEndTime(activeDayIndex, section)"
+            class="absolute right-1 top-0 text-2xs text-white"
+          >
+            止
+          </text>
+
+          <view class="flex items-center gap-0.5">
+            <view v-if="isTimeSelected(activeDayIndex, section)" class="i-carbon-checkmark text-xs" />
+            <text>{{ section.starttime }}</text>
+          </view>
+          <text v-if="!isTimeAvailable(section)" class="text-2xs leading-none">{{ slotLabel(section) }}</text>
+        </view>
+      </view>
+      <!-- 底部固定栏的安全区占位 -->
+      <view class="pb-safe" />
+    </view>
+  </PageState>
+
+  <!-- 底部固定栏：已选摘要 + 主按钮 -->
+  <view v-if="data" class="fixed bottom-0 left-0 right-0 z-50 bg-card px-4 pt-3 shadow-float pb-safe-3">
+    <view class="flex items-center gap-3">
+      <view class="min-w-0 flex-1">
+        <template v-if="summaryText">
+          <view class="truncate text-sm text-fg-1 font-medium">
+            {{ summaryText }}
+          </view>
+          <view v-if="durationText" class="text-xs text-fg-3">
+            {{ durationText }}
+          </view>
+        </template>
+        <view v-else class="text-sm text-fg-3">
+          请选择预约时段
+        </view>
+      </view>
+      <button class="btn-primary shrink-0 px-6" :disabled="!canSubmit" @click="goToCheckout">
+        下一步
       </button>
     </view>
   </view>
 
-  <!-- 无数据状态 -->
-  <view v-else class="flex flex-col items-center justify-center py-20">
-    <text class="text-gray-400">暂无数据</text>
-    <button class="mt-4 rounded-lg bg-blue-500 px-6 py-2 text-white" @click="fetchData">
-      重新加载
-    </button>
-  </view>
-
   <!-- 预约须知弹窗 -->
-  <uv-popup ref="noticePopupRef" mode="center" :round="12">
-    <view class="w-72 rounded-xl bg-white p-5">
-      <view class="mb-4 text-center text-lg text-gray-800 font-bold">
+  <uv-popup ref="noticePopupRef" mode="bottom" :round="16" :safe-area-inset-bottom="true">
+    <view class="px-4 pb-4 pt-5">
+      <view class="text-center text-lg text-fg-1 font-semibold">
         预约须知
       </view>
-      <view class="text-sm text-gray-600 leading-relaxed">
+      <view class="mt-4 text-sm text-fg-2 leading-relaxed">
         <view class="mb-2">
-          1. 预约开始时间前后15分钟内始终无人刷卡使用，或预约时间段内超过 40% 时间房间内实际人数未达到房间预约人数一半以上，将被扣除信用分。
+          1. 预约开始时间前后 15 分钟内始终无人刷卡使用，或预约时间段内超过 40% 时间房间内实际人数未达到房间预约人数一半以上，将被扣除信用分。
         </view>
         <view class="mb-2">
-          2. 个人每天最多预约时长为3小时，同一时段不可预约多个房间。
+          2. 个人每天最多预约时长为 3 小时，同一时段不可预约多个房间。
         </view>
         <view class="mb-2">
           3. 小组账户可以长期预约，不受上述限制，长期预约时可以选择本周开始或者下周开始。
         </view>
         <view class="mb-2">
-          4. 更多使用规则请参考<text class="text-blue-500" @click="openAgreement">《35楼地下室使用规范》</text>。
+          4. 更多使用规则请参考<text class="text-primary" @click="openAgreement">《35楼地下室使用规范》</text>。
         </view>
         <view>5. 如果无法预约，可在应用界面尝试旧版预约，或在反馈中心进行反馈，我们会在后续更新中修复。</view>
       </view>
-      <button
-        class="mt-5 w-full rounded-lg bg-blue-500 py-2.5 text-white"
-        @click="closeNoticePopup"
-      >
-        我知道了
+      <button class="btn-primary mt-5 btn-block" @click="closeNoticePopup">
+        知道了
       </button>
     </view>
   </uv-popup>
 </template>
-
-<style lang="scss" scoped>
-// 安全区域底部内边距
-.pb-safe {
-  padding-bottom: env(safe-area-inset-bottom);
-}
-</style>
