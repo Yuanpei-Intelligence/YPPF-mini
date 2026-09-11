@@ -244,11 +244,13 @@ Success feedback is owned by the initiating UI layer, never by `src/http` or a r
 
 1. Put a new main-package page at `src/pages/<domain>/<name>.vue`. Only authentication subpackage pages belong in `src/pages-auth/`.
 2. Use `<script setup lang="ts">` and declare page metadata with `definePage`. Only the actual home page sets `type: 'home'`.
-3. Use leading-slash uni-app routes that match a freshly generated `src/pages.json`. Do not use browser Vue Router APIs.
+3. Use leading-slash uni-app routes that match a freshly generated `src/pages.json`, including letter case. Do not use browser Vue Router APIs.
 4. Use `uni.switchTab` for tabbar pages and `uni.navigateTo`/`redirectTo`/`reLaunch` elsewhere. Let the global interceptor update login and tabbar state.
 5. Change tabbar items only in `src/tabbar/config.ts`, verify the page/icon, restart the dev process, and inspect the regenerated page output.
 6. Read and validate/decode route parameters in `onLoad`. Refresh cached/returning pages in `onShow` or through `usePageRefresh`.
 7. Verify route, query, stack, tabbar, direct-entry/share-entry, and callback behavior in WeChat DevTools.
+
+Page paths are case-sensitive at runtime. Never add page files or directories whose paths differ only by letter case. macOS and Windows checkouts collapse such paths into one file and register the page under whatever case is on disk, so routes in the other case are not found. Case-sensitive build hosts keep both pages but rename one page chunk (for example `feedback2.js`), leaving a registered page without its script, and DevTools cannot start the app.
 
 Authentication route names in `src/router/config.ts`, `src/pages-auth/*.vue`, and old README text are not fully aligned. For auth work, inspect newly generated routes, update all constants coherently, and verify real navigation. Do not copy an old path.
 
