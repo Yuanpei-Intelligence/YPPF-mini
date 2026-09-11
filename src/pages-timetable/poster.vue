@@ -1,8 +1,8 @@
 <script lang="ts" setup>
 import type { ShareAssets } from '@/api/types/share'
-import type { Occurrence, OverviewOut, WeekView } from '@/api/types/timetable'
+import type { OverviewExam, OverviewOut, WeekView } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
-import type { ExamListLayout, MeasureText, TermGrid, TermPart } from '@/utils/poster-overview'
+import type { CalendarNotesLayout, ExamListLayout, MeasureText, PosterDayColumn, PosterGrid, PosterPart, PosterSlot } from '@/utils/poster-overview'
 import type { PosterBadgeKind, PosterFill, PosterMode, PosterTheme, PosterThemeKey } from '@/utils/poster-themes'
 import type { SectionRow } from '@/utils/timetable'
 import { onLoad, onShareAppMessage, onUnload } from '@dcloudio/uni-app'
@@ -15,7 +15,7 @@ import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { debounce } from '@/utils/debounce'
 import { confirmModal } from '@/utils/dialog'
-import { hasWeekendSlots, layoutExamList, layoutTermGrid } from '@/utils/poster-overview'
+import { hasWeekendSlots, layoutCalendarNotes, layoutExamList, layoutPosterGrid, posterDayColumns } from '@/utils/poster-overview'
 import {
   blockColorFor,
   DEFAULT_POSTER_MODE,
@@ -34,15 +34,13 @@ import {
   AUDIT_BADGE,
   calendarLabelColor,
   chineseDate,
-  dayInfo,
   displayClock,
   KIND_BADGES,
-  occurrenceRowSpan,
   readLocalHiddenIds,
   readWeekendMode,
   shortDate,
-  suspendsClasses,
   todayIso,
+  weekCalendarNotes,
   WEEKDAY_LABELS,
   weekGridRows,
   weekSuspendedReason,
@@ -106,18 +104,37 @@ interface PosterLayout {
   footerHeight: number
 }
 
-/** 整学期海报：通用部分与本周海报同名同义，网格与考试安排另有排版结果 */
-interface TermPosterLayout extends PosterLayout {
-  /** 页眉、卡片边距、图例与页脚相对本周海报的放大倍数 */
+/** 海报布局（整学期与本周共用）：通用部分之外，网格、表头、校历与考试安排另有排版结果 */
+interface GridPosterLayout extends PosterLayout {
+  /** 页眉、卡片边距、图例与页脚相对 CHROME_BASE 宽度的放大倍数 */
   unit: number
-  grid: TermGrid
+  grid: PosterGrid
+  dayHeaderHeight: number
+  /** 本周海报表头各列的日期、今天与校历；整学期为 null，表头只写星期 */
+  days: PosterDayColumn[] | null
+  /** 本周海报表头上方的校历全文 */
+  notes: CalendarNotesLayout | null
+  notesTop: number
   exams: ExamListLayout | null
   examsTop: number
   examsHeight: number
+  /** 网格里一块日程都没有时居中写的一句 */
+  emptyText: string
 }
 
-interface TermLayoutOptions {
-  /** 逻辑宽度，取自 TERM_WIDTHS */
+/** 海报要排的内容 */
+interface GridPosterContent {
+  /** 整学期：每周时段；本周：这一周可见的日程 */
+  items: PosterSlot[]
+  /** 列在图例下方的考试；本周海报的考试就在网格里，为空 */
+  exams: OverviewExam[]
+  /** 本周海报的周视图（表头日期、今天与校历）；整学期为 null */
+  week: WeekView | null
+  emptyText: string
+}
+
+interface GridLayoutOptions {
+  /** 逻辑宽度，取自 POSTER_WIDTHS */
   width: number
   hasLegend: boolean
   hasTiles: boolean
@@ -139,10 +156,6 @@ const PAGE_PAD = 14
 /** 页眉：标题 + 副标题 + 到卡片的间距 */
 const HEADER_H = 78
 const CARD_PAD = 10
-/** 星期 + 日期 + 校历标签三行；标签行常驻占位 */
-const DAY_HEADER_H = 50
-const LEFT_COL = 26
-const ROW_H = 40
 const LEGEND_H = 26
 const FOOTER_H = 46
 const FOOTER_QR_H = 92
@@ -152,22 +165,29 @@ const QR_GAP = 10
 const MAX_DPR = 3
 const MAX_CANVAS_SIDE = 4096
 /**
- * 整学期海报的逻辑宽度，依次尝试：默认 720，七列时每列约 86，长课程名折成几行；
- * 课多到长边超限、导出倍率低于 TERM_MIN_EXPORT_SCALE 时换更宽的画布——折行少了、整体变矮，导出的字反而更大
+ * 海报的逻辑宽度，依次尝试：默认 720，七列时每列约 86，长名称折成几行；
+ * 日程多到长边超限、导出倍率低于 MIN_EXPORT_SCALE 时换更宽的画布——折行少了、整体变矮，导出的字反而更大
  */
-const TERM_WIDTHS = [720, 900, 1080, 1260]
-/** 页眉、卡片、图例与页脚沿用本周海报的绘制，按「宽度 / 此值」整体放大（720 宽时 1.6 倍） */
-const TERM_CHROME_BASE = 450
-/** 整学期表头只有星期，没有日期与校历 */
-const TERM_DAY_HEADER_H = 36
+const POSTER_WIDTHS = [720, 900, 1080, 1260]
+/** 页眉、卡片、图例与页脚在这个宽度的坐标里绘制，按「宽度 / 此值」整体放大（720 宽时 1.6 倍） */
+const CHROME_BASE = 450
+/** 整学期表头只有星期 */
+const DAY_HEADER_H = 36
+/** 本周表头：星期与日期（今天垫一枚强调色胶囊）；有校历的周再加一行短标签 */
+const WEEK_HEADER_H = 46
+const WEEK_HEADER_TAG_H = 62
+const TODAY_PILL_TOP = 3
+const TODAY_PILL_H = 38
+/** 校历全文与表头之间的留白 */
+const NOTES_GAP = 8
 /** 节次列：细条里要并排写下两位数节次与上课时间 */
-const TERM_LEFT_COL = 48
+const AXIS_COL = 48
 /** 考试安排：标题行、列表左侧留给圆点的缩进、列表下方留白 */
 const TERM_EXAMS_HEADING_H = 34
 const TERM_EXAMS_INDENT = 14
 const TERM_EXAMS_BOTTOM = 14
 /** 导出倍率下限：12px 的地点、周次文字导出后不小于 18 像素 */
-const TERM_MIN_EXPORT_SCALE = 1.5
+const MIN_EXPORT_SCALE = 1.5
 const IMAGE_TIMEOUT_MS = 8000
 /** 出图前最多等二维码图片这么久；没等到就先画，图片到了再重绘补上 */
 const QR_WAIT_MS = 1500
@@ -209,8 +229,8 @@ const withQr = ref(false)
 const showName = ref(false)
 /** 整学期海报是否写上教师；只作用于本页，默认不写 */
 const showTeacher = ref(false)
-/** 整学期海报隐藏周六、周日两列；只在本学期周末没有课时可选，默认跟课表页的「隐藏周末」设置 */
-const hideWeekend = ref(false)
+/** 隐藏周六、周日两列：只在这份海报周末没有日程时可选（canHideWeekend），默认跟课表页的「隐藏周末」设置 */
+const hideWeekend = ref(readWeekendMode() === 'hide')
 /** 转发卡片用的 5:4 缩略图（海报顶部），导出失败就用微信默认截图 */
 const shareImagePath = ref('')
 const query = ref<{ term?: string, week?: number }>({})
@@ -233,7 +253,6 @@ const theme = computed(() => POSTER_THEMES[themeKey.value])
 const effectiveMode = computed<PosterMode>(() => (overviewUnsupported.value ? 'week' : mode.value))
 const activeTerm = computed(() => (effectiveMode.value === 'term' ? overview.value?.term : view.value?.term) ?? null)
 const hasAssets = computed(() => !!(assets.value?.miniapp_qrcode || assets.value?.official_qrcode))
-const canHideWeekend = computed(() => !!overview.value && !hasWeekendSlots(overview.value.slots))
 const displayName = computed(() => (showName.value ? userStore.userInfo.name || '' : ''))
 const title = computed(() => (displayName.value ? `${displayName.value}的课表` : '我的课表'))
 const subtitle = computed(() => {
@@ -251,7 +270,7 @@ const modeHint = computed(() => {
     return '服务器暂不支持整学期海报，先生成本周的'
   return effectiveMode.value === 'term'
     ? '每周的课程都在，单双周分开标注；课程名、地点、上课周次完整保留'
-    : '只含这一周的日程，包括活动与预约'
+    : '只含这一周的日程，包括活动、预约与考试；名称、地点完整保留'
 })
 /** 当前内容还不能保存或分享（正在取数据、取失败或还没画出来） */
 const posterBlocked = computed(() => modeLoading.value || !!modeError.value || rendering.value || !!renderError.value)
@@ -259,6 +278,10 @@ const visibleOccurrences = computed(() => {
   const localHidden = new Set(readLocalHiddenIds(userStore.userInfo.username))
   return (view.value?.occurrences ?? []).filter(item => !item.hidden && !localHidden.has(item.id))
 })
+/** 周六、周日都没有日程时才提供「隐藏周末」；有周末日程时始终画七列 */
+const canHideWeekend = computed(() => (effectiveMode.value === 'term'
+  ? !!overview.value && !hasWeekendSlots(overview.value.slots)
+  : !!view.value && !hasWeekendSlots(visibleOccurrences.value)))
 /** 网格行与课表页同一套时间轴：节次表，日程伸出节次表时前后补整点的钟点行（section 为 0） */
 const rows = computed(() => weekGridRows(
   activeTerm.value,
@@ -272,19 +295,16 @@ function legendFor(kinds: Set<string>): LegendItem[] {
     .map(kind => ({ kind, label: kind === 'course' ? '学校课程' : KIND_BADGES[kind] ?? kind }))
 }
 
-const legendItems = computed(() => legendFor(new Set(visibleOccurrences.value.map(item => item.kind as string))))
-/** 整学期图例另加「旁听」：格子里的「旁」字不看图例不好懂 */
-const termLegendItems = computed(() => {
-  const slots = overview.value?.slots ?? []
-  const items = legendFor(new Set(slots.map(item => item.kind as string)))
-  if (slots.some(item => item.role === 'audit'))
-    items.push({ kind: 'audit', label: '旁听' })
-  return items
-})
-
-function badgeKindOf(kind: string): PosterBadgeKind | null {
-  return (POSTER_BADGE_KINDS as readonly string[]).includes(kind) ? kind as PosterBadgeKind : null
+/** 有旁听时图例另加「旁听」：格子里的「旁」字不看图例不好懂 */
+function legendOf(items: { kind: string, role?: string }[]): LegendItem[] {
+  const legend = legendFor(new Set(items.map(item => item.kind)))
+  if (items.some(item => item.role === 'audit'))
+    legend.push({ kind: 'audit', label: '旁听' })
+  return legend
 }
+
+const legendItems = computed(() => legendOf(visibleOccurrences.value))
+const termLegendItems = computed(() => legendOf(overview.value?.slots ?? []))
 
 function swatchStyle(item: PosterTheme) {
   return { background: `linear-gradient(135deg, ${item.swatch[0]} 50%, ${item.swatch[1]} 50%)` }
@@ -302,68 +322,41 @@ function sleep(ms: number): Promise<void> {
 
 /* -------------------- 布局 -------------------- */
 
-function buildLayout(width: number, rowCount: number, hasLegend: boolean, hasTiles: boolean): PosterLayout {
-  const cardX = PAGE_PAD
-  const cardY = PAGE_PAD + HEADER_H
-  const cardW = width - PAGE_PAD * 2
-  const innerLeft = cardX + CARD_PAD
-  const innerWidth = cardW - CARD_PAD * 2
-  const dayHeaderTop = cardY + CARD_PAD
-  const gridTop = dayHeaderTop + DAY_HEADER_H
-  const gridHeight = Math.max(rowCount, 1) * ROW_H
-  const legendTop = gridTop + gridHeight
-  const legendHeight = hasLegend ? LEGEND_H : 8
-  const footerTop = legendTop + legendHeight
-  const footerHeight = hasTiles ? FOOTER_QR_H : FOOTER_H
-  const cardH = footerTop + footerHeight - cardY
-  return {
-    width,
-    height: cardY + cardH + PAGE_PAD,
-    headerTop: PAGE_PAD + 10,
-    cardX,
-    cardY,
-    cardW,
-    cardH,
-    innerLeft,
-    innerWidth,
-    dayHeaderTop,
-    gridTop,
-    gridLeft: innerLeft + LEFT_COL,
-    gridWidth: innerWidth - LEFT_COL,
-    gridHeight,
-    colWidth: (innerWidth - LEFT_COL) / 7,
-    legendTop,
-    legendHeight,
-    footerTop,
-    footerHeight,
-  }
-}
-
-/** 整学期海报：页眉、卡片边距与页脚按宽度等比放大，网格行高由内容决定 */
-function buildTermLayout(data: OverviewOut, sectionList: SectionRow[], measure: MeasureText, options: TermLayoutOptions): TermPosterLayout {
+/**
+ * 海报布局：页眉、卡片边距与页脚按宽度等比放大，网格行高由内容决定。
+ * 本周海报的表头写日期与校历短标签，校历全文写在表头上方；整学期海报在图例下方列出考试安排
+ */
+function buildGridLayout(content: GridPosterContent, sectionList: SectionRow[], measure: MeasureText, options: GridLayoutOptions): GridPosterLayout {
   const { width } = options
-  const unit = width / TERM_CHROME_BASE
+  const unit = width / CHROME_BASE
   const cardX = PAGE_PAD * unit
   const cardY = (PAGE_PAD + HEADER_H) * unit
   const cardW = width - cardX * 2
   const innerLeft = cardX + CARD_PAD * unit
   const innerWidth = cardW - CARD_PAD * unit * 2
-  const dayHeaderTop = cardY + CARD_PAD * unit
-  const gridTop = dayHeaderTop + TERM_DAY_HEADER_H
-  const gridLeft = innerLeft + TERM_LEFT_COL
-  const gridWidth = innerWidth - TERM_LEFT_COL
-  const grid = layoutTermGrid({
+  const notesTop = cardY + CARD_PAD * unit
+  const notes = content.week ? layoutCalendarNotes(innerWidth - 4, weekCalendarNotes(content.week), measure) : null
+  const dayHeaderTop = notesTop + (notes ? notes.height + NOTES_GAP : 0)
+  const gridLeft = innerLeft + AXIS_COL
+  const gridWidth = innerWidth - AXIS_COL
+  const grid = layoutPosterGrid({
     width: gridWidth,
     rows: sectionList,
-    slots: data.slots,
+    slots: content.items,
     showTeacher: options.showTeacher,
     bar: options.bar,
     hideWeekend: options.hideWeekend,
+    clockTimes: !!content.week,
   }, measure)
+  const days = content.week ? posterDayColumns(content.week, grid.weekdays) : null
+  let dayHeaderHeight = DAY_HEADER_H
+  if (days)
+    dayHeaderHeight = days.some(day => day.kind) ? WEEK_HEADER_TAG_H : WEEK_HEADER_H
+  const gridTop = dayHeaderTop + dayHeaderHeight
   const legendTop = gridTop + grid.height
   const legendHeight = (options.hasLegend ? LEGEND_H : 8) * unit
   const examsTop = legendTop + legendHeight
-  const exams = data.exams.length ? layoutExamList(innerWidth - TERM_EXAMS_INDENT - 2, data.exams, measure) : null
+  const exams = content.exams.length ? layoutExamList(innerWidth - TERM_EXAMS_INDENT - 2, content.exams, measure) : null
   const examsHeight = exams ? TERM_EXAMS_HEADING_H + exams.height + TERM_EXAMS_BOTTOM : 0
   const footerTop = examsTop + examsHeight
   const footerHeight = (options.hasTiles ? FOOTER_QR_H : FOOTER_H) * unit
@@ -390,13 +383,18 @@ function buildTermLayout(data: OverviewOut, sectionList: SectionRow[], measure: 
     footerHeight,
     unit,
     grid,
+    dayHeaderHeight,
+    days,
+    notes,
+    notesTop,
     exams,
     examsTop,
     examsHeight,
+    emptyText: content.emptyText,
   }
 }
 
-/** 布局坐标整体乘 factor：本周海报的绘制函数在 1/unit 的坐标里画、再放大 unit 倍 */
+/** 布局坐标整体乘 factor：页眉、卡片、图例与页脚在 1/unit 的坐标里画、再放大 unit 倍 */
 function scaleLayout(layout: PosterLayout, factor: number): PosterLayout {
   return {
     width: layout.width * factor,
@@ -422,22 +420,22 @@ function scaleLayout(layout: PosterLayout, factor: number): PosterLayout {
 }
 
 /**
- * 依次试 TERM_WIDTHS：长边不超过画布上限、导出倍率够 TERM_MIN_EXPORT_SCALE 就用；
+ * 依次试 POSTER_WIDTHS：长边不超过画布上限、导出倍率够 MIN_EXPORT_SCALE 就用；
  * 都不够时取倍率最大的那个（文字仍然完整，只是小一些）。返回布局与绘制倍率。
  */
-function fitTermLayout(
-  data: OverviewOut,
+function fitGridLayout(
+  content: GridPosterContent,
   sectionList: SectionRow[],
   measure: MeasureText,
-  options: Omit<TermLayoutOptions, 'width'>,
-): { layout: TermPosterLayout, scale: number } {
+  options: Omit<GridLayoutOptions, 'width'>,
+): { layout: GridPosterLayout, scale: number } {
   const fit = (width: number) => {
-    const layout = buildTermLayout(data, sectionList, measure, { ...options, width })
+    const layout = buildGridLayout(content, sectionList, measure, { ...options, width })
     return { layout, scale: Math.min(MAX_DPR, MAX_CANVAS_SIDE / Math.max(layout.width, layout.height, 1)) }
   }
-  let best = fit(TERM_WIDTHS[0])
-  for (const width of TERM_WIDTHS.slice(1)) {
-    if (best.scale >= TERM_MIN_EXPORT_SCALE)
+  let best = fit(POSTER_WIDTHS[0])
+  for (const width of POSTER_WIDTHS.slice(1)) {
+    if (best.scale >= MIN_EXPORT_SCALE)
       break
     const next = fit(width)
     if (next.scale > best.scale)
@@ -448,22 +446,10 @@ function fitTermLayout(
 
 /* -------------------- 画布 -------------------- */
 
-function posterWidth(): number {
+/** 海报在页面上的显示宽度（画布本身按 POSTER_WIDTHS 里选中的宽度绘制，按屏宽缩小显示） */
+function previewWidth(): number {
   const info = uni.getWindowInfo()
-  return Math.min(info.windowWidth - 24, 400)
-}
-
-/** 整学期海报在页面上的显示宽度（画布本身按 TERM_WIDTHS 里选中的宽度绘制） */
-function termPreviewWidth(): number {
-  const info = uni.getWindowInfo()
-  return Math.min(info.windowWidth - 24, TERM_WIDTHS[0])
-}
-
-/** 设备 DPR，封顶 3，且保证放大后的长边不超过微信 canvas 上限 */
-function canvasScale(layout: PosterLayout): number {
-  const pixelRatio = uni.getWindowInfo().pixelRatio || 2
-  const longest = Math.max(layout.width, layout.height, 1)
-  return Math.max(1, Math.min(pixelRatio, MAX_DPR, MAX_CANVAS_SIDE / longest))
+  return Math.min(info.windowWidth - 24, POSTER_WIDTHS[0])
 }
 
 function getCanvas(): Promise<Canvas2D> {
@@ -609,53 +595,7 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) 
   return `${clipped}…`
 }
 
-/** 按字符折行，最多 maxLines 行，最后一行超出时补省略号 */
-function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, maxLines: number) {
-  const lines: string[] = []
-  if (maxLines <= 0)
-    return lines
-  let current = ''
-  for (const char of Array.from(text)) {
-    const next = current + char
-    if (current && ctx.measureText(next).width > maxWidth) {
-      if (lines.length === maxLines - 1) {
-        lines.push(fitText(ctx, next, maxWidth))
-        return lines
-      }
-      lines.push(current)
-      current = char
-    }
-    else {
-      current = next
-    }
-  }
-  if (current)
-    lines.push(current)
-  return lines
-}
-
-/* -------------------- 绘制：本周海报与共用的页眉页脚 -------------------- */
-
-function drawPoster(
-  ctx: CanvasRenderingContext2D,
-  data: WeekView,
-  theme: PosterTheme,
-  layout: PosterLayout,
-  header: HeaderText,
-  sectionList: SectionRow[],
-  legend: LegendItem[],
-  tiles: QrTile[],
-) {
-  ctx.clearRect(0, 0, layout.width, layout.height)
-  drawPage(ctx, theme, layout)
-  drawHeader(ctx, theme, layout, header)
-  drawCard(ctx, theme, layout)
-  drawDayHeader(ctx, data, theme, layout)
-  drawGrid(ctx, theme, layout, sectionList)
-  drawBlocks(ctx, data, theme, layout, sectionList)
-  drawLegend(ctx, theme, layout, legend)
-  drawFooter(ctx, theme, layout, tiles)
-}
+/* -------------------- 绘制：页眉、卡片、图例与页脚 -------------------- */
 
 /** 整页底色与各风格的装饰 */
 function drawPage(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: PosterLayout) {
@@ -762,196 +702,6 @@ function drawCard(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: Pos
   }
 }
 
-/** 星期表头与整列底色：停课列置灰，今日列淡色并给表头一枚强调色胶囊 */
-function drawDayHeader(ctx: CanvasRenderingContext2D, data: WeekView, theme: PosterTheme, layout: PosterLayout) {
-  const { dayHeaderTop, gridTop, gridLeft, gridHeight, colWidth } = layout
-  const bottom = gridTop + gridHeight
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  for (let i = 0; i < 7; i++) {
-    const x = gridLeft + i * colWidth
-    const centre = x + colWidth / 2
-    const date = data.week_dates[i] ?? ''
-    const isToday = !!date && date === data.today.date
-    const day = dayInfo(data, i)
-    const suspended = suspendsClasses(day?.kind)
-    if (suspended) {
-      ctx.fillStyle = theme.grid.suspended
-      ctx.fillRect(x, dayHeaderTop, colWidth, bottom - dayHeaderTop)
-    }
-    if (isToday) {
-      ctx.fillStyle = withAlpha(theme.grid.today, 0.08)
-      ctx.fillRect(x, gridTop, colWidth, gridHeight)
-      ctx.fillStyle = theme.header.accent
-      roundRect(ctx, x + 3, dayHeaderTop + 2, colWidth - 6, 32, 8)
-      ctx.fill()
-    }
-    ctx.fillStyle = isToday ? theme.text.onAccent : theme.text.secondary
-    setFont(ctx, 11, 'bold')
-    ctx.fillText(`周${WEEKDAY_LABELS[i]}`, centre, dayHeaderTop + 12)
-    ctx.fillStyle = isToday ? theme.text.onAccent : theme.text.muted
-    setFont(ctx, 9)
-    ctx.fillText(date ? shortDate(date) : '', centre, dayHeaderTop + 26)
-    const label = day?.label || (suspended ? '停课' : '')
-    if (label) {
-      // 校历标签：放假 / 考试红，调休蓝，仅标注灰，与课表页同一套颜色
-      ctx.fillStyle = calendarLabelColor(day?.kind) || theme.text.muted
-      setFont(ctx, 8)
-      ctx.fillText(fitText(ctx, label, colWidth - 4), centre, dayHeaderTop + 43)
-    }
-  }
-}
-
-/** 节次列与网格线 */
-function drawGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: PosterLayout, sectionList: SectionRow[]) {
-  const { innerLeft, innerWidth, gridTop, gridLeft, gridHeight, colWidth } = layout
-  const labelX = innerLeft + LEFT_COL / 2
-  ctx.strokeStyle = theme.grid.line
-  ctx.lineWidth = 1
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  sectionList.forEach((row, index) => {
-    const y = gridTop + index * ROW_H
-    strokeLine(ctx, innerLeft, y, innerLeft + innerWidth, y)
-    if (row.section === 0) {
-      // 节次表之外的钟点行：写起止时刻
-      ctx.fillStyle = theme.grid.section
-      setFont(ctx, 8, 'bold')
-      ctx.fillText(displayClock(row.start), labelX, y + 13)
-      ctx.fillStyle = theme.text.muted
-      setFont(ctx, 7.5)
-      ctx.fillText(displayClock(row.end), labelX, y + 25)
-      return
-    }
-    ctx.fillStyle = theme.grid.section
-    setFont(ctx, 11, 'bold')
-    ctx.fillText(String(row.section), labelX, y + 13)
-    ctx.fillStyle = theme.text.muted
-    setFont(ctx, 7.5)
-    ctx.fillText(row.start, labelX, y + 25)
-    ctx.fillText(row.end, labelX, y + 34)
-  })
-  strokeLine(ctx, innerLeft, gridTop + gridHeight, innerLeft + innerWidth, gridTop + gridHeight)
-  for (let i = 0; i <= 7; i++) {
-    const x = gridLeft + i * colWidth
-    strokeLine(ctx, x, gridTop, x, gridTop + gridHeight)
-  }
-}
-
-/** 日程格子；没有日程时在网格中央写一行空状态 */
-function drawBlocks(ctx: CanvasRenderingContext2D, data: WeekView, theme: PosterTheme, layout: PosterLayout, sectionList: SectionRow[]) {
-  const visible = visibleOccurrences.value
-  if (!visible.length) {
-    const reason = weekSuspendedReason(data)
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillStyle = theme.text.muted
-    setFont(ctx, 13)
-    ctx.fillText(
-      reason ? `${reason} · 本周停课` : '本周还没有日程',
-      layout.gridLeft + layout.gridWidth / 2,
-      layout.gridTop + layout.gridHeight / 2,
-    )
-    return
-  }
-  // 时间冲突的日程并排摆放
-  const visibleIds = new Set(visible.map(item => item.id))
-  const slots: Record<string, { index: number, count: number }> = {}
-  for (const group of data.conflicts) {
-    const ids = group.filter(id => visibleIds.has(id))
-    ids.forEach((id, index) => {
-      slots[id] = { index, count: ids.length }
-    })
-  }
-  for (const occurrence of visible)
-    drawBlock(ctx, occurrence, slots[occurrence.id] ?? { index: 0, count: 1 }, theme, layout, sectionList)
-}
-
-function drawBlock(
-  ctx: CanvasRenderingContext2D,
-  occurrence: Occurrence,
-  slot: { index: number, count: number },
-  theme: PosterTheme,
-  layout: PosterLayout,
-  sectionList: SectionRow[],
-) {
-  const { gridLeft, gridTop, colWidth } = layout
-  const { top, span } = occurrenceRowSpan(occurrence, sectionList)
-  const color = blockColorFor(theme, occurrence)
-  const column = Math.min(Math.max(occurrence.weekday, 1), 7) - 1
-  const slotWidth = colWidth / slot.count
-  const x = gridLeft + column * colWidth + slot.index * slotWidth + 2
-  const y = gridTop + top * ROW_H + 2
-  const w = slotWidth - 4
-  const h = span * ROW_H - 4
-  if (w <= 4 || h <= 4)
-    return
-
-  ctx.save()
-  if (occurrence.status === 'canceled')
-    ctx.globalAlpha = 0.55
-  ctx.fillStyle = color.bg
-  roundRect(ctx, x, y, w, h, theme.block.radius)
-  ctx.fill()
-  if (theme.block.bar) {
-    ctx.fillStyle = color.fg
-    roundRect(ctx, x + 3, y + 5, 2.5, h - 10, 1.25)
-    ctx.fill()
-  }
-
-  const textX = x + (theme.block.bar ? 9 : 6)
-  const textWidth = w - (theme.block.bar ? 12 : 10)
-  const lineHeight = 12
-  const badgeKind = badgeKindOf(occurrence.kind)
-  const badge = badgeKind ? KIND_BADGES[badgeKind] ?? '' : ''
-  const audit = occurrence.role === 'audit'
-  // 底部一行放类别角标与旁听的「旁」字（靠右并排）；要放它们时给底部留出一行，格子很矮时标题让位
-  const hasBadgeRow = !!badge || audit
-  const maxLines = Math.max(Math.floor((h - 8 - (hasBadgeRow ? 11 : 0)) / lineHeight), 1)
-  ctx.textAlign = 'left'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = color.fg
-  setFont(ctx, 9, 'bold')
-  const titleLines = wrapText(ctx, occurrence.title, textWidth, Math.min(maxLines, 2))
-  titleLines.forEach((line, index) => {
-    ctx.fillText(line, textX, y + 5 + index * lineHeight)
-  })
-  let nextY = y + 5 + titleLines.length * lineHeight
-  if (occurrence.location && titleLines.length < maxLines) {
-    ctx.fillStyle = withAlpha(color.fg, 0.8)
-    setFont(ctx, 8)
-    ctx.fillText(fitText(ctx, occurrence.location, textWidth), textX, nextY)
-    nextY += lineHeight
-  }
-  if (hasBadgeRow && nextY + 11 <= y + h - 3) {
-    const pillY = y + h - 15
-    let right = x + w - 4
-    setFont(ctx, 7, 'bold')
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    if (badgeKind && badge) {
-      const badgeColor = theme.badges[badgeKind]
-      const badgeWidth = ctx.measureText(badge).width + 8
-      ctx.fillStyle = badgeColor.bg
-      roundRect(ctx, right - badgeWidth, pillY, badgeWidth, 11, 5.5)
-      ctx.fill()
-      ctx.fillStyle = badgeColor.fg
-      ctx.fillText(badge, right - badgeWidth / 2, pillY + 5.5)
-      right -= badgeWidth + 3
-    }
-    if (audit) {
-      // 旁听课程的「旁」字小标，和课表页一致
-      const auditWidth = ctx.measureText(AUDIT_BADGE).width + 6
-      ctx.fillStyle = withAlpha(color.fg, 0.18)
-      roundRect(ctx, right - auditWidth, pillY, auditWidth, 11, 5.5)
-      ctx.fill()
-      ctx.fillStyle = color.fg
-      ctx.fillText(AUDIT_BADGE, right - auditWidth / 2, pillY + 5.5)
-    }
-  }
-  ctx.restore()
-}
-
 /** 图例：出现过的类别 */
 function drawLegend(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: PosterLayout, items: LegendItem[]) {
   if (!items.length)
@@ -1039,18 +789,18 @@ function drawFooter(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: P
   ctx.fillText(fitText(ctx, hint, textWidth), innerLeft + 2, sloganY + 16)
 }
 
-/* -------------------- 绘制：整学期海报 -------------------- */
+/* -------------------- 绘制：网格海报（整学期与本周） -------------------- */
 
-function drawTermPoster(
+function drawGridPoster(
   ctx: CanvasRenderingContext2D,
   theme: PosterTheme,
-  layout: TermPosterLayout,
+  layout: GridPosterLayout,
   header: HeaderText,
   sectionList: SectionRow[],
   legend: LegendItem[],
   tiles: QrTile[],
 ) {
-  // 页眉、卡片、图例、页脚与本周海报同一套绘制，在缩小的坐标里画再整体放大
+  // 页眉、卡片、图例、页脚在缩小的坐标里画再整体放大
   const chrome = scaleLayout(layout, 1 / layout.unit)
   ctx.clearRect(0, 0, layout.width, layout.height)
   ctx.save()
@@ -1059,9 +809,10 @@ function drawTermPoster(
   drawHeader(ctx, theme, chrome, header)
   drawCard(ctx, theme, chrome)
   ctx.restore()
-  drawTermDayHeader(ctx, theme, layout)
-  drawTermGrid(ctx, theme, layout, sectionList)
-  drawTermBlocks(ctx, theme, layout)
+  drawCalendarNotes(ctx, theme, layout)
+  drawDayHeader(ctx, theme, layout)
+  drawGrid(ctx, theme, layout, sectionList)
+  drawBlocks(ctx, theme, layout)
   ctx.save()
   ctx.scale(layout.unit, layout.unit)
   drawLegend(ctx, theme, chrome, legend)
@@ -1070,36 +821,101 @@ function drawTermPoster(
   drawExamList(ctx, theme, layout)
 }
 
-/** 表头只写星期：整学期海报不对应具体日期 */
-function drawTermDayHeader(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: TermPosterLayout) {
-  const { dayHeaderTop, gridLeft, grid } = layout
+/** 本周海报表头上方的校历全文：圆点取校历配色（放假 / 考试红，调休蓝，仅标注灰），文字完整折行 */
+function drawCalendarNotes(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: GridPosterLayout) {
+  const { notes, notesTop, innerLeft } = layout
+  if (!notes)
+    return
+  const left = innerLeft + 2
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'top'
+  setFont(ctx, notes.font.size, notes.font.weight)
+  for (const line of notes.lines) {
+    const top = notesTop + line.y
+    if (line.first) {
+      ctx.fillStyle = calendarLabelColor(line.kind) || theme.text.muted
+      ctx.beginPath()
+      ctx.arc(left + 3, top + notes.lineHeight / 2, 2.5, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.fillStyle = theme.text.secondary
+    ctx.fillText(line.text, left + notes.indent, top + (notes.lineHeight - notes.font.size) / 2)
+  }
+}
+
+/**
+ * 表头。整学期只写星期；本周写星期与日期，与课表页的表头一致：今天垫一枚强调色胶囊、整列淡色，
+ * 放假 / 考试周整列置灰，有校历的日子在日期下写短标签（没有关键词的仅标注事件画一个圆点）
+ */
+function drawDayHeader(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: GridPosterLayout) {
+  const { dayHeaderTop, dayHeaderHeight, gridTop, gridLeft, gridHeight, grid, days } = layout
+  const colWidth = grid.colWidth
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.fillStyle = theme.text.secondary
-  setFont(ctx, 14, 'bold')
-  grid.weekdays.forEach((weekday, index) => {
-    ctx.fillText(`周${WEEKDAY_LABELS[weekday - 1]}`, gridLeft + (index + 0.5) * grid.colWidth, dayHeaderTop + TERM_DAY_HEADER_H / 2)
+  if (!days) {
+    ctx.fillStyle = theme.text.secondary
+    setFont(ctx, 14, 'bold')
+    grid.weekdays.forEach((weekday, index) => {
+      ctx.fillText(`周${WEEKDAY_LABELS[weekday - 1]}`, gridLeft + (index + 0.5) * colWidth, dayHeaderTop + dayHeaderHeight / 2)
+    })
+    return
+  }
+  // 短标签行在胶囊下方，居中于多出的那一行
+  const tagY = dayHeaderTop + (WEEK_HEADER_H + WEEK_HEADER_TAG_H) / 2 - 2
+  days.forEach((day, index) => {
+    const x = gridLeft + index * colWidth
+    const centre = x + colWidth / 2
+    if (day.suspended) {
+      ctx.fillStyle = theme.grid.suspended
+      ctx.fillRect(x, dayHeaderTop, colWidth, gridTop + gridHeight - dayHeaderTop)
+    }
+    if (day.today) {
+      ctx.fillStyle = withAlpha(theme.grid.today, 0.08)
+      ctx.fillRect(x, gridTop, colWidth, gridHeight)
+      ctx.fillStyle = theme.header.accent
+      roundRect(ctx, x + 4, dayHeaderTop + TODAY_PILL_TOP, colWidth - 8, TODAY_PILL_H, 10)
+      ctx.fill()
+    }
+    ctx.fillStyle = day.today ? theme.text.onAccent : theme.text.secondary
+    setFont(ctx, 14, 'bold')
+    ctx.fillText(`周${WEEKDAY_LABELS[day.weekday - 1]}`, centre, dayHeaderTop + 15)
+    ctx.fillStyle = day.today ? theme.text.onAccent : theme.text.muted
+    setFont(ctx, 11)
+    ctx.fillText(day.date, centre, dayHeaderTop + 32)
+    if (!day.kind)
+      return
+    ctx.fillStyle = calendarLabelColor(day.kind) || theme.text.muted
+    if (day.tag) {
+      setFont(ctx, 11, 'bold')
+      ctx.fillText(day.tag, centre, tagY)
+    }
+    else {
+      ctx.beginPath()
+      ctx.arc(centre, tagY, 2.5, 0, Math.PI * 2)
+      ctx.fill()
+    }
   })
 }
 
 /**
- * 节次标签随行高换写法：够高写节次号与起止时间，矮一些写节次号与上课时间，收成细条时一行写完。
- * 节次表之外的钟点行把节次号换成起始时刻、上课时间换成结束时刻
+ * 节次列的标签随行高换写法：够高写节次号与起止时间，矮一些写节次号与上课时间，收成细条时并排写在一行。
+ * 节次表之外的钟点行编号位留空，只在节次时间的位置写开始时刻（字号、颜色、字重与节次时间相同），不写结束时刻
  */
 function drawSectionLabel(ctx: CanvasRenderingContext2D, theme: PosterTheme, row: SectionRow, left: number, top: number, height: number) {
-  const centre = left + TERM_LEFT_COL / 2
+  const centre = left + AXIS_COL / 2
   const clock = row.section === 0
-  const head = clock ? displayClock(row.start) : String(row.section)
-  const tail = clock ? displayClock(row.end) : row.start
+  const start = displayClock(row.start)
   ctx.textBaseline = 'middle'
   if (height >= 46) {
     ctx.textAlign = 'center'
-    ctx.fillStyle = theme.grid.section
-    setFont(ctx, clock ? 12 : 14, 'bold')
-    ctx.fillText(head, centre, top + 15)
+    if (!clock) {
+      ctx.fillStyle = theme.grid.section
+      setFont(ctx, 14, 'bold')
+      ctx.fillText(String(row.section), centre, top + 15)
+    }
     ctx.fillStyle = theme.text.muted
     setFont(ctx, 10)
-    ctx.fillText(tail, centre, top + 30)
+    ctx.fillText(start, centre, top + 30)
     if (!clock)
       ctx.fillText(row.end, centre, top + 42)
     return
@@ -1107,33 +923,38 @@ function drawSectionLabel(ctx: CanvasRenderingContext2D, theme: PosterTheme, row
   const middle = top + height / 2
   if (height >= 28) {
     ctx.textAlign = 'center'
-    ctx.fillStyle = theme.grid.section
-    setFont(ctx, clock ? 11 : 13, 'bold')
-    ctx.fillText(head, centre, middle - 6)
+    if (!clock) {
+      ctx.fillStyle = theme.grid.section
+      setFont(ctx, 13, 'bold')
+      ctx.fillText(String(row.section), centre, middle - 6)
+    }
     ctx.fillStyle = theme.text.muted
     setFont(ctx, 9)
-    ctx.fillText(tail, centre, middle + 7)
+    ctx.fillText(start, centre, middle + 7)
     return
   }
-  // 细条：左边写节次号（钟点行写起始时刻），右边写时间；放不下时缩小右边字号，再放不下只写左边
-  ctx.textAlign = 'left'
-  ctx.fillStyle = theme.grid.section
-  setFont(ctx, clock ? 9.5 : 11, 'bold')
-  const room = TERM_LEFT_COL - 8 - ctx.measureText(head).width - 3
-  ctx.fillText(head, left + 4, middle)
+  // 细条：节次号靠左，时间靠右；放不下时缩小时间的字号，再放不下只写节次号
+  let room = AXIS_COL - 8
+  if (!clock) {
+    ctx.textAlign = 'left'
+    ctx.fillStyle = theme.grid.section
+    setFont(ctx, 11, 'bold')
+    room -= ctx.measureText(String(row.section)).width + 3
+    ctx.fillText(String(row.section), left + 4, middle)
+  }
   setFont(ctx, 8.5)
-  const tailWidth = ctx.measureText(tail).width
-  if (room < tailWidth * 7 / 8.5)
+  const startWidth = ctx.measureText(start).width
+  if (room < startWidth * 7 / 8.5)
     return
-  if (tailWidth > room)
-    setFont(ctx, 8.5 * room / tailWidth)
+  if (startWidth > room)
+    setFont(ctx, 8.5 * room / startWidth)
   ctx.textAlign = 'right'
   ctx.fillStyle = theme.text.muted
-  ctx.fillText(tail, left + TERM_LEFT_COL - 4, middle)
+  ctx.fillText(start, left + AXIS_COL - 4, middle)
 }
 
-/** 网格线、节次列与午休 / 晚饭分隔带；行高各不相同，没课的节次收成细条 */
-function drawTermGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: TermPosterLayout, sectionList: SectionRow[]) {
+/** 网格线、节次列与分隔带（午休 / 晚饭，早间 / 晚间）；行高各不相同，没有日程的行收成细条 */
+function drawGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: GridPosterLayout, sectionList: SectionRow[]) {
   const { innerLeft, innerWidth, gridTop, gridLeft, gridHeight, grid } = layout
   const right = innerLeft + innerWidth
   ctx.strokeStyle = theme.grid.line
@@ -1146,14 +967,13 @@ function drawTermGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout:
     const y = gridTop + gap.y
     ctx.fillStyle = theme.grid.suspended
     ctx.fillRect(innerLeft, y, innerWidth, gap.height)
-    // 分隔带文字只写在左侧节次列里：连时刻放得下就一起写，放不下只写「午休」「晚饭」
+    // 分隔带文字只写在左侧节次列里，字号颜色一致：课间连时刻放得下就一起写，放不下只写「午休」「晚饭」；早间 / 晚间只写名称
     ctx.fillStyle = theme.text.muted
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
     setFont(ctx, 9)
-    const room = TERM_LEFT_COL - 8
-    const label = `${gap.label} ${gap.start}–${gap.end}`
-    ctx.fillText(fitText(ctx, ctx.measureText(label).width <= room ? label : gap.label, room), innerLeft + 4, y + gap.height / 2)
+    const full = gap.zone ? gap.label : `${gap.label} ${gap.start}–${gap.end}`
+    ctx.fillText(ctx.measureText(full).width <= AXIS_COL - 8 ? full : gap.label, innerLeft + 4, y + gap.height / 2)
     strokeLine(ctx, innerLeft, y, right, y)
   }
   sectionList.forEach((row, index) => {
@@ -1164,11 +984,11 @@ function drawTermGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout:
   strokeLine(ctx, innerLeft, gridTop + gridHeight, right, gridTop + gridHeight)
 }
 
-function drawTermBlocks(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: TermPosterLayout) {
+function drawBlocks(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: GridPosterLayout) {
   const { grid } = layout
   if (!grid.clusters.length) {
-    // 空学期的网格只有细条，提示文字压一块卡片底色，免得和网格线叠在一起
-    const text = '本学期还没有课程'
+    // 空网格只有细条，提示文字压一块卡片底色，免得和网格线叠在一起
+    const text = layout.emptyText
     const centreX = layout.gridLeft + layout.gridWidth / 2
     const centreY = layout.gridTop + layout.gridHeight / 2
     setFont(ctx, 16)
@@ -1184,12 +1004,12 @@ function drawTermBlocks(ctx: CanvasRenderingContext2D, theme: PosterTheme, layou
   }
   for (const cluster of grid.clusters) {
     for (const part of cluster.parts)
-      drawTermPart(ctx, part, cluster.column, theme, layout)
+      drawPart(ctx, part, cluster.column, theme, layout)
   }
 }
 
-/** 一块格子：底色、色条、逐行文字（课程名 / 地点 / 周次 / 教师）与小标 */
-function drawTermPart(ctx: CanvasRenderingContext2D, part: TermPart, column: number, theme: PosterTheme, layout: TermPosterLayout) {
+/** 一块格子：底色、色条、逐行文字（名称 / 地点 / 周次与时间 / 教师）与小标；已取消的日程整块淡一些 */
+function drawPart(ctx: CanvasRenderingContext2D, part: PosterPart, column: number, theme: PosterTheme, layout: GridPosterLayout) {
   const { grid, gridLeft, gridTop } = layout
   const metrics = grid.metrics
   const columnLeft = gridLeft + column * grid.colWidth
@@ -1199,6 +1019,8 @@ function drawTermPart(ctx: CanvasRenderingContext2D, part: TermPart, column: num
   const h = part.height
   const color = blockColorFor(theme, part.slot)
   ctx.save()
+  if ('status' in part.slot && part.slot.status === 'canceled')
+    ctx.globalAlpha = 0.55
   ctx.fillStyle = color.bg
   roundRect(ctx, x, y, w, h, theme.block.radius)
   ctx.fill()
@@ -1213,7 +1035,7 @@ function drawTermPart(ctx: CanvasRenderingContext2D, part: TermPart, column: num
   ctx.textBaseline = 'top'
   for (const line of part.lines) {
     const isTitle = line.role === 'title'
-    // 课程名与周次用满色，地点与教师稍淡
+    // 名称与周次、时间用满色，地点与教师稍淡
     ctx.fillStyle = isTitle || line.role === 'weeks' ? color.fg : withAlpha(color.fg, 0.8)
     const font = isTitle ? metrics.title : metrics.meta
     setFont(ctx, font.size, font.weight)
@@ -1223,11 +1045,12 @@ function drawTermPart(ctx: CanvasRenderingContext2D, part: TermPart, column: num
   for (const pill of part.pills) {
     const pillX = textX + pill.offsetX
     const pillY = y + pill.offsetY
-    const college = pill.kind === 'college' ? theme.badges.college : null
-    ctx.fillStyle = college ? college.bg : withAlpha(color.fg, 0.18)
+    // 类别角标用风格的角标色；「旁」与「已取消」用格子文字色的浅底
+    const badge = pill.kind === 'audit' || pill.kind === 'status' ? null : theme.badges[pill.kind]
+    ctx.fillStyle = badge ? badge.bg : withAlpha(color.fg, 0.18)
     roundRect(ctx, pillX, pillY, pill.width, metrics.pillHeight, metrics.pillHeight / 2)
     ctx.fill()
-    ctx.fillStyle = college ? college.fg : color.fg
+    ctx.fillStyle = badge ? badge.fg : color.fg
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     setFont(ctx, metrics.pill.size, metrics.pill.weight)
@@ -1237,7 +1060,7 @@ function drawTermPart(ctx: CanvasRenderingContext2D, part: TermPart, column: num
 }
 
 /** 图例下方的考试安排：名称 | 日期 星期 · 时段 时间 · 地点 */
-function drawExamList(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: TermPosterLayout) {
+function drawExamList(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: GridPosterLayout) {
   const { exams, examsTop, innerLeft, innerWidth } = layout
   if (!exams)
     return
@@ -1285,45 +1108,45 @@ function drawExamList(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout:
 
 /* -------------------- 渲染流程 -------------------- */
 
-async function renderWeek(canvas: Canvas2D, tiles: QrTile[]) {
+/** 当前内容要排进网格的日程；数据还没取到时为 null */
+function posterContent(): GridPosterContent | null {
+  if (effectiveMode.value === 'term') {
+    const data = overview.value
+    return data ? { items: data.slots, exams: data.exams, week: null, emptyText: '本学期还没有课程' } : null
+  }
   const data = view.value
   if (!data)
-    return
-  const layout = buildLayout(posterWidth(), rows.value.length, legendItems.value.length > 0, tiles.length > 0)
-  canvasSize.value = { width: layout.width, height: layout.height }
-  await nextTick()
-  const scale = canvasScale(layout)
-  canvas.width = Math.round(layout.width * scale)
-  canvas.height = Math.round(layout.height * scale)
-  const ctx = canvas.getContext('2d')
-  ctx.scale(scale, scale)
-  const header = { title: title.value, subtitle: subtitle.value, numeral: String(data.week) }
-  drawPoster(ctx, data, theme.value, layout, header, rows.value, legendItems.value, tiles)
-  void prepareShareImage(layout.width, 2)
+    return null
+  const reason = weekSuspendedReason(data)
+  return { items: visibleOccurrences.value, exams: [], week: data, emptyText: reason ? `${reason} · 本周停课` : '本周还没有日程' }
 }
 
-async function renderTerm(canvas: Canvas2D, tiles: QrTile[]) {
-  const data = overview.value
-  if (!data)
+/** 两种内容同一套网格排版与绘制；画布按选中的宽度绘制，页面上按屏宽缩小显示 */
+async function renderPoster(canvas: Canvas2D, tiles: QrTile[]) {
+  const content = posterContent()
+  if (!content)
     return
-  const { layout, scale } = fitTermLayout(data, rows.value, measurerFor(canvas.getContext('2d')), {
-    hasLegend: termLegendItems.value.length > 0,
+  const week = content.week
+  const legend = week ? legendItems.value : termLegendItems.value
+  const { layout, scale } = fitGridLayout(content, rows.value, measurerFor(canvas.getContext('2d')), {
+    hasLegend: legend.length > 0,
     hasTiles: tiles.length > 0,
-    showTeacher: showTeacher.value,
+    // 「显示教师」只在整学期海报上提供
+    showTeacher: !week && showTeacher.value,
     bar: theme.value.block.bar,
     hideWeekend: hideWeekend.value,
   })
-  const displayWidth = termPreviewWidth()
+  const displayWidth = previewWidth()
   canvasSize.value = { width: displayWidth, height: Math.round(layout.height * displayWidth / layout.width) }
   await nextTick()
   canvas.width = Math.round(layout.width * scale)
   canvas.height = Math.round(layout.height * scale)
   const ctx = canvas.getContext('2d')
   ctx.scale(scale, scale)
-  const header = { title: title.value, subtitle: subtitle.value, numeral: '' }
-  drawTermPoster(ctx, theme.value, layout, header, rows.value, termLegendItems.value, tiles)
+  const header = { title: title.value, subtitle: subtitle.value, numeral: week ? String(week.week) : '' }
+  drawGridPoster(ctx, theme.value, layout, header, rows.value, legend, tiles)
   // 缩略图输出宽度不超过默认宽度，够转发卡片用
-  void prepareShareImage(displayWidth, Math.min(layout.width, TERM_WIDTHS[0]) / displayWidth)
+  void prepareShareImage(displayWidth, Math.min(layout.width, POSTER_WIDTHS[0]) / displayWidth)
 }
 
 async function renderOnce() {
@@ -1332,10 +1155,7 @@ async function renderOnce() {
     const canvas = canvasNode ?? await getCanvas()
     canvasNode = canvas
     const tiles = await loadQrTiles(canvas)
-    if (effectiveMode.value === 'term')
-      await renderTerm(canvas, tiles)
-    else
-      await renderWeek(canvas, tiles)
+    await renderPoster(canvas, tiles)
   }
   catch (error) {
     console.error('绘制海报失败:', error)
@@ -1406,10 +1226,7 @@ async function ensureModeData(target: PosterMode) {
     if (overview.value)
       return
     try {
-      const data = await getOverview({ term: query.value.term })
-      // 周末没有课时「隐藏周末」默认跟课表页的设置；周末有课始终画七列
-      hideWeekend.value = !hasWeekendSlots(data.slots) && readWeekendMode() === 'hide'
-      overview.value = data
+      overview.value = await getOverview({ term: query.value.term })
       return
     }
     catch (error) {
@@ -1649,7 +1466,7 @@ onShareAppMessage(() => {
           <text class="text-sm text-fg-2">显示教师</text>
           <uv-switch :model-value="showTeacher" size="20" :active-color="tokens.primary" @change="handleTeacherChange" />
         </view>
-        <view v-if="effectiveMode === 'term' && canHideWeekend" class="flex items-center gap-2">
+        <view v-if="canHideWeekend" class="flex items-center gap-2">
           <text class="text-sm text-fg-2">隐藏周末</text>
           <uv-switch :model-value="hideWeekend" size="20" :active-color="tokens.primary" @change="handleHideWeekendChange" />
         </view>
