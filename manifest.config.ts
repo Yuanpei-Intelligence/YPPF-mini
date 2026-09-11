@@ -131,6 +131,8 @@ export default defineManifestConfig({
     // 是否合并组件虚拟节点外层属性，uni-app 3.5.1+ 开始支持。目前仅支持 style、class 属性。
     // 默认不开启（undefined），这里设置为开启。
     mergeVirtualHostAttributes: true,
+    // Inject only the custom components a page actually renders instead of all of them at launch
+    lazyCodeLoading: 'requiredComponents',
     // styleIsolation: 'shared',
     usingComponents: true,
     // __usePrivacyCheck__: true,

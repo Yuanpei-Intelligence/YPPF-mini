@@ -14,6 +14,12 @@ import {
   transformerVariantGroup,
 } from 'unocss'
 
+/**
+ * Design tokens are declared once as CSS variables on `page` (src/style/index.scss,
+ * values from src/uni.scss). The UnoCSS theme below only references those variables,
+ * so classes such as `text-primary`, `bg-card`, `text-fg-2` never hard-code a color.
+ * See docs/design/README.md for the full token table and usage rules.
+ */
 export default defineConfig({
   presets: [
     presetUni({
@@ -47,31 +53,65 @@ export default defineConfig({
         ),
       },
     }),
-    // TODO: check 是否会有别的影响
-    // 处理低端安卓机的样式问题
-    // 将颜色函数 (rgb()和hsl()) 从空格分隔转换为逗号分隔，更好的兼容性app端，example：
-    // `rgb(255 0 0)` -> `rgb(255, 0, 0)`
-    // `rgba(255 0 0 / 0.5)` -> `rgba(255, 0, 0, 0.5)`
+    // 处理低端安卓机的样式问题：颜色函数从空格分隔转为逗号分隔，并去掉 oklch 关键字
     presetLegacyCompat({
       commaStyleColorFunction: true,
-      legacyColorSpace: true, // by QQ4群-量子蔷薇
-      // @菲鸽 unocss 配置中，建议在 presetLegacyCompat 中添加 legacyColorSpace: true，以去除生成的颜色样式中的 in oklch 关键字，现在发现有些渐变色生成不符合预期
+      legacyColorSpace: true,
     }) as Preset,
   ],
   transformers: [
     // 启用指令功能：主要用于支持 @apply、@screen 和 theme() 等 CSS 指令
     transformerDirectives(),
-    // 启用 () 分组功能
-    // 支持css class组合，eg: `<div class="hover:(bg-gray-400 font-medium) font-(light mono)">测试 unocss</div>`
+    // 启用 () 分组功能，eg: `<view class="hover:(bg-gray-400 font-medium)">`
     transformerVariantGroup(),
   ],
   shortcuts: [
     {
-      center: 'flex justify-center items-center',
+      'center': 'flex justify-center items-center',
+
+      // Page skeleton
+      'yp-page': 'min-h-screen bg-page',
+      'yp-container': 'px-4',
+      'yp-card': 'rounded-lg bg-card p-4 shadow-card',
+      'yp-card-flat': 'rounded-lg bg-card p-4',
+      'yp-section-title': 'text-lg font-semibold text-fg-1',
+      'yp-caption': 'text-xs text-fg-3',
+      'yp-divider': 'h-1px w-full bg-line-light',
+      'yp-list-item': 'flex items-center gap-3 min-h-104rpx px-4 bg-card active:bg-fill',
+      'yp-input': 'box-border w-full min-h-88rpx rounded-md bg-fill px-3 text-base text-fg-1',
+
+      // Buttons (native <button> or <view>); combine: `btn-primary btn-block`
+      'btn-base': 'box-border inline-flex items-center justify-center gap-1 mx-0 min-h-88rpx rounded-md px-4 text-base font-medium leading-normal transition-opacity active:opacity-80 disabled:opacity-50',
+      'btn-primary': 'btn-base bg-primary text-white',
+      'btn-secondary': 'btn-base bg-primary-light text-primary',
+      'btn-outline': 'btn-base border border-line bg-card text-fg-1',
+      'btn-danger': 'btn-base bg-error-light text-error',
+      'btn-ghost': 'btn-base bg-transparent text-fg-2',
+      'btn-text': 'inline-flex items-center justify-center gap-1 mx-0 min-h-64rpx px-2 text-sm text-primary leading-normal active:opacity-70',
+      'btn-sm': 'min-h-64rpx px-3 text-sm rounded-sm',
+      'btn-block': 'flex w-full',
     },
   ],
-  // 动态图标需要在这里配置，或者写在vue页面中注释掉
-  safelist: ['i-carbon-code', 'i-carbon-home', 'i-carbon-user'],
+  // 动态图标类必须在这里登记（tabbar 图标、PageState/StatusTag 等通过 prop 传入的图标）
+  safelist: [
+    'i-carbon-home',
+    'i-carbon-calendar',
+    'i-carbon-apps',
+    'i-carbon-user',
+    'i-carbon-code',
+    'i-carbon-document-blank',
+    'i-carbon-notification',
+    'i-carbon-search',
+    'i-carbon-warning-alt',
+    'i-carbon-wifi-off',
+    'i-carbon-checkmark-filled',
+    'i-carbon-time',
+    'i-carbon-book',
+    'i-carbon-shopping-cart',
+    'i-carbon-chat',
+    'i-carbon-event-schedule',
+    'i-carbon-location',
+  ],
   rules: [
     [
       'p-safe',
@@ -82,46 +122,98 @@ export default defineConfig({
     ],
     ['pt-safe', { 'padding-top': 'env(safe-area-inset-top)' }],
     ['pb-safe', { 'padding-bottom': 'env(safe-area-inset-bottom)' }],
-    // Shadow 阴影工具类
-    ['shadow-sm', { 'box-shadow': '0 1px 2px 0 rgba(0, 0, 0, 0.05)' }],
-    ['shadow', { 'box-shadow': '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)' }],
-    ['shadow-md', { 'box-shadow': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1)' }],
-    ['shadow-lg', { 'box-shadow': '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1)' }],
-    ['shadow-xl', { 'box-shadow': '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)' }],
-    ['shadow-2xl', { 'box-shadow': '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }],
-    ['shadow-none', { 'box-shadow': 'none' }],
+    // Fixed bottom bars: inner spacing plus the safe area in one declaration, so it never
+    // competes with `py-*` on the same element.
+    ['pb-safe-3', { 'padding-bottom': 'calc(24rpx + env(safe-area-inset-bottom))' }],
   ],
   theme: {
     colors: {
-      /** 主题色，用法如: text-primary */
-      primary: 'var(--wot-color-theme,#0957DE)',
+      /** 品牌色：text-primary / bg-primary / border-primary；变体 primary-dark / primary-light / primary-disabled */
+      primary: {
+        DEFAULT: 'var(--yp-color-primary)',
+        dark: 'var(--yp-color-primary-dark)',
+        light: 'var(--yp-color-primary-light)',
+        disabled: 'var(--yp-color-primary-disabled)',
+      },
+      success: {
+        DEFAULT: 'var(--yp-color-success)',
+        dark: 'var(--yp-color-success-dark)',
+        light: 'var(--yp-color-success-light)',
+      },
+      warning: {
+        DEFAULT: 'var(--yp-color-warning)',
+        dark: 'var(--yp-color-warning-dark)',
+        light: 'var(--yp-color-warning-light)',
+      },
+      error: {
+        DEFAULT: 'var(--yp-color-error)',
+        dark: 'var(--yp-color-error-dark)',
+        light: 'var(--yp-color-error-light)',
+      },
+      info: {
+        DEFAULT: 'var(--yp-color-info)',
+        dark: 'var(--yp-color-info-dark)',
+        light: 'var(--yp-color-info-light)',
+      },
+      /** 品牌色（北大红 / 元培米色）：只用于标志、品牌文字、元气值展示，不进按钮、胶囊、表单 */
+      brand: {
+        DEFAULT: 'var(--yp-color-brand)',
+        light: 'var(--yp-color-brand-light)',
+      },
+      /** 文字层级：text-fg-1（标题正文）/ text-fg-2（次要）/ text-fg-3（说明、占位）/ text-fg-4（禁用） */
+      fg: {
+        1: 'var(--yp-text-1)',
+        2: 'var(--yp-text-2)',
+        3: 'var(--yp-text-3)',
+        4: 'var(--yp-text-4)',
+        inverse: 'var(--yp-text-inverse)',
+      },
+      /** 背景：bg-page / bg-card / bg-fill / bg-fill-active / bg-mask */
+      page: 'var(--yp-bg-page)',
+      card: 'var(--yp-bg-card)',
+      fill: {
+        DEFAULT: 'var(--yp-bg-fill)',
+        active: 'var(--yp-bg-fill-active)',
+      },
+      mask: 'var(--yp-mask)',
+      /** 边框：border-line / border-line-light */
+      line: {
+        DEFAULT: 'var(--yp-border)',
+        light: 'var(--yp-border-light)',
+      },
     },
+    /** 字号阶梯（rpx；2rpx ≈ 1pt）：xs 12 / sm 14 / base 15 / lg 17 / xl 20 / 2xl 24 / 3xl 28 */
     fontSize: {
-      /** 提供更小号的字体，用法如：text-2xs */
-      '2xs': ['20rpx', '28rpx'],
-      '3xs': ['18rpx', '26rpx'],
+      '2xs': ['22rpx', '30rpx'],
+      'xs': ['24rpx', '34rpx'],
+      'sm': ['28rpx', '40rpx'],
+      'base': ['30rpx', '44rpx'],
+      'lg': ['34rpx', '48rpx'],
+      'xl': ['40rpx', '56rpx'],
+      '2xl': ['48rpx', '64rpx'],
+      '3xl': ['56rpx', '72rpx'],
+    },
+    /** 圆角：rounded-sm 8 / rounded(-md) 16 / rounded-lg 24 / rounded-xl 32 / rounded-2xl 40 (rpx) */
+    borderRadius: {
+      'none': '0',
+      'sm': 'var(--yp-radius-sm)',
+      'DEFAULT': 'var(--yp-radius-md)',
+      'md': 'var(--yp-radius-md)',
+      'lg': 'var(--yp-radius-lg)',
+      'xl': 'var(--yp-radius-xl)',
+      '2xl': '40rpx',
+      'full': '9999px',
+    },
+    /** 阴影只保留两档：shadow-card（卡片）/ shadow-float（浮层、固定底栏） */
+    boxShadow: {
+      none: 'none',
+      card: 'var(--yp-shadow-card)',
+      float: 'var(--yp-shadow-float)',
+      sm: 'var(--yp-shadow-card)',
+      DEFAULT: 'var(--yp-shadow-card)',
+      md: 'var(--yp-shadow-float)',
+      lg: 'var(--yp-shadow-float)',
+      xl: 'var(--yp-shadow-float)',
     },
   },
-  // windows 系统会报错：[plugin:unocss:transformers:pre] Cannot overwrite a zero-length range - use append Left or prependRight instead.
-  // 去掉下面的就正常了
-  // content: {
-  //   /**
-  //    * 解决小程序报错 `./app.wxss(78:2814): unexpected unexpected at pos 5198`
-  //    * 为什么同时使用include和exclude？虽然看起来多余，但同时配置两者是一种常见的 `防御性编程` 做法。
-  //      1. 结构变化保障 : 如果未来项目结构发生变化，某些排除目录可能被移动到包含路径下，exclude配置可以确保它们仍被排除
-  //      2. 明确性 : 明确列出要排除的目录使配置意图更加清晰
-  //      3. 性能优化 : 避免处理不必要的文件，提高构建性能
-  //      4. 防止冲突 : 排除第三方库和构建输出目录，避免潜在的CSS冲突
-  //    */
-  //   pipeline: {
-  //     exclude: [
-  //       'node_modules/**/*',
-  //       'public/**/*',
-  //       'dist/**/*',
-  //     ],
-  //     include: [
-  //       './src/**/*',
-  //     ],
-  //   },
-  // },
 })

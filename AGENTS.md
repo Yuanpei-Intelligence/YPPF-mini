@@ -81,6 +81,7 @@ src/main.ts
 
 - `src/pages/`: main-package pages. File location and `definePage` generate the route.
 - `src/pages-auth/`: authentication subpackage registered in `vite.config.ts`.
+- `src/pages-timetable/`: subpackage for the secondary timetable pages (import, entry form, catalog, grades, poster, day view), registered in `vite.config.ts` and preloaded through `pages.config.ts#preloadRule`. `src/pages/timetable/index.vue` stays in the main package because backend shares, subscribe messages and the mini-program code open `pages/timetable/index`.
 - `src/components/`: reusable business/presentation components, including `ApiFieldError.vue` for field-level backend errors.
 - `src/api/types/`: pure wire-contract types.
 - `src/api/*.ts`: typed endpoint wrappers.
@@ -215,7 +216,7 @@ class RequestError extends Error {
 Transport rules:
 
 - `kind` is derived from the HTTP status: 401 is `authentication`, 403 is `permission`, other 4xx are `business`, 5xx are `server`; a `uni.request` failure is `network`; anything else is `unknown`. Feature APIs and pages branch on `RequestError.kind` or `code`, never by parsing a translated message.
-- `parseApiErrorResponse` accepts only the canonical `{ code, message, errors }` payload. Any other non-2xx body becomes `code: 'invalid_error_response'` with the safe generic message. Do not add legacy-payload parsers (`detail`, `msg`, string arrays) to the transport; migrate the backend endpoint instead.
+- `parseApiErrorResponse` accepts only the canonical `{ code, message, errors }` payload. `errors` may be omitted (treated as `{}`), and a DRF field dict inside `errors` (`string[]` or a single string per field) is normalized to `{ code: 'invalid', message }` items so validation payloads keep their backend `code`. Any other non-2xx body becomes `code: 'invalid_error_response'` with the safe generic message. Do not add legacy-payload parsers (`detail`, `msg`, top-level string arrays) to the transport; migrate the backend endpoint instead.
 - Network failures use `code: 'network_error'` and the fixed message `网络连接失败，请检查网络后重试。`. `toRequestError` wraps any non-`RequestError` throwable as `unknown_error`.
 - A 401 from a protected endpoint re-runs `tokenStore.wxLogin()` and replays the request; an `unbound` result navigates to the binding page and rejects with `auth.binding_required`. Paths listed in `NO_RETRY_PATHS` (login page, bind/login endpoints) are never retried.
 - Every endpoint of a module migrated to the standardized contract passes `errorPresentation: 'manual'` through the request options. This turns off the transport's own `uni.showToast` for HTTP and network failures; it never suppresses rejection. `hideErrorToast` is deprecated and remains only so untouched legacy calls keep working.
@@ -242,7 +243,7 @@ Success feedback is owned by the initiating UI layer, never by `src/http` or a r
 
 ## Page and routing workflow
 
-1. Put a new main-package page at `src/pages/<domain>/<name>.vue`. Only authentication subpackage pages belong in `src/pages-auth/`.
+1. Put a new main-package page at `src/pages/<domain>/<name>.vue`. Subpackage pages belong only in a registered subpackage root (`src/pages-auth/`, `src/pages-timetable/`). Keep tab pages and any page the backend or a share links to in the main package; a secondary page of a large feature can go to that feature's subpackage.
 2. Use `<script setup lang="ts">` and declare page metadata with `definePage`. Only the actual home page sets `type: 'home'`.
 3. Use leading-slash uni-app routes that match a freshly generated `src/pages.json`. Do not use browser Vue Router APIs.
 4. Use `uni.switchTab` for tabbar pages and `uni.navigateTo`/`redirectTo`/`reLaunch` elsewhere. Let the global interceptor update login and tabbar state.
@@ -292,11 +293,13 @@ Authentication route names in `src/router/config.ts`, `src/pages-auth/*.vue`, an
 
 - Use uni-app components such as `view`, `text`, `image`, and `scroll-view` plus `uni.*` APIs. Do not use `window`, `document`, DOM-only events, or browser-only CSS.
 - Prefer UnoCSS for straightforward layout. Use scoped SCSS for complex page styles, pseudo-elements, or deliberate third-party overrides.
+- Follow `docs/design/README.md` (design tokens, page skeleton, component selection, states, copy, migration table). Colors, font sizes, radii and shadows come only from the token layer (`src/uni.scss` → `src/style/index.scss` → `uno.config.ts` theme → `src/style/tokens.ts`); pages must not hard-code hex colors or Tailwind palette classes.
 - Reuse `primary` and `p-safe`/`pt-safe`/`pb-safe`. Do not create near-duplicate theme or safe-area rules.
 - Use `rpx` where responsive mini-program sizing matters and existing UnoCSS px utilities for stable icons/layout. Test narrow screens, long Chinese text, and bottom safe areas.
-- `wd-*` components are registered through easycom; uv-ui comes from `src/uni_modules`. Continue a compliant component family already used by the feature, but do not introduce a third UI library.
+- uv-ui (`src/uni_modules/uv-*`) is the single component family, complemented by the shared components in `src/components/` (`PageState`, `StatusTag`, `FormField`, `AppConfirmModal`) and the `btn-*`/`yp-*` UnoCSS shortcuts. wot-design-uni (`wd-*`) has been removed; do not introduce another UI library.
+- Confirmations go through `useConfirm().confirm()` (global `uv-modal` mounted in `App.ku.vue`); `confirmModal()` in `src/utils/dialog.ts` is a compatibility proxy to it.
 - Dynamic UnoCSS/icon classes must appear as complete static literals or be added to `uno.config.ts#safelist`.
-- A page with `navigationStyle: 'custom'` uses the established `uv-navbar` approach with `placeholder`, safe-area handling, and a back action for non-home pages.
+- Pages use the native navigation bar styled once in `pages.config.ts#globalStyle` (white bar, dark text); `definePage` sets only the title and must not override the bar colors. A page with `navigationStyle: 'custom'` (currently only tab pages that need in-bar controls) uses the established `uv-navbar` approach with `placeholder`, safe-area handling, and a back action for non-home pages.
 - Prefer `uni.chooseMedia` for WeChat media selection. Use a WeChat-specific API only when uni-app has no equivalent, and isolate it under `MP-WEIXIN` when the compiler requires it.
 - Do not add H5/App branches for a new feature. Existing non-WeChat branches are legacy and may be left untouched unless they block the WeChat implementation or build.
 
@@ -304,7 +307,7 @@ Authentication route names in `src/router/config.ts`, `src/pages-auth/*.vue`, an
 
 This section is a dated snapshot, not a permanent waiver. Remove or update an item when it is fixed.
 
-- On 2026-07-14, `pnpm lint` reported 65 errors and 20 warnings, mainly in `src/pages/appoint/arrange-by-time.vue`, `src/pages/me/my-appointments.vue`, and `src/utils/globalError.ts`. Do not use those files as formatting examples.
+- On 2026-09-10 (after the design-token refresh), `pnpm lint` reports 1 error: `src/utils/globalError.ts` (missing final newline, untouched legacy file). The earlier 65-error snapshot in `arrange-by-time.vue` / `my-appointments.vue` was cleared by their rewrite.
 - The same snapshot had `pnpm type-check` fail in `src/uni_modules/uv-popup/components/uv-popup/uv-popup.vue:122` with `TS1005`.
 - Several pages import `openWebview` from `@/utils` even though the barrel does not export it. New/touched code imports `@/utils/webview` directly.
 - `@img` resolves to `src/static/images` in Vite but `src/static/*` in TypeScript. Until unified, use `/static/images/...` runtime paths or explicit `@/static/images/...` imports.
