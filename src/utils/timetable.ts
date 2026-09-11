@@ -511,7 +511,15 @@ export function swapDescription(item: Pick<Occurrence, 'swap_from'>): string {
 }
 
 /**
- * 「照常上课」：存储条目的课在校历停课日仍按普通日程返回（ignore_calendar 在这一周生效）。
+ * 受校历停课影响的日程：课程类的存储条目。其它（手动添加）、考试、书院课、活动、预约从不按校历停课，
+ * 也就没有「照常上课」「恢复按校历停课」
+ */
+export function isCalendarLesson(item: Occurrence): boolean {
+  return item.kind === 'course' && isEditableOccurrence(item)
+}
+
+/**
+ * 「照常上课」：课程类存储条目（isCalendarLesson）在校历停课日仍按普通日程返回（ignore_calendar 在这一周生效）。
  * 条目详情的调整里有这个键就以它为准；没加载详情或没有这个键时，按“停课日 + status 为空 + 不是调休副本”推断。
  * 不返回 swap_from 的旧后端没有这项功能
  */
@@ -520,9 +528,9 @@ export function heldDespiteCalendar(
   day: Pick<WeekDay, 'kind' | 'follows_weekday'> | null | undefined,
   entry?: Entry | null,
 ): boolean {
-  if (item.swap_from === undefined || item.status !== '' || swapFromWeekday(item) || item.kind === 'exam')
+  if (!isCalendarLesson(item) || item.swap_from === undefined || item.status !== '' || swapFromWeekday(item))
     return false
-  if (!isEditableOccurrence(item) || !calendarSuspendsOwnLessons(day))
+  if (!calendarSuspendsOwnLessons(day))
     return false
   const resolved = entry ? effectiveOverrideAt(entry, item.week).fields.ignore_calendar : undefined
   return resolved ?? true
@@ -862,7 +870,8 @@ export function isEditableOccurrence(item: Occurrence): boolean {
 /**
  * 详情弹层的操作：书院课 / 活动 → 查看活动，预约 → 查看预约；
  * 存储条目 → 编辑、本次停课（考试除外）、恢复默认（有调整时）、删除（手动条目）；任何日程都可隐藏 / 取消隐藏。
- * 校历停课日的课以「照常上课」为主操作、不再给本次停课；已设为照常上课的课多一个「恢复按校历停课」
+ * 校历停课日的课以「照常上课」为主操作、不再给本次停课；已设为照常上课的课多一个「恢复按校历停课」。
+ * 这两个操作只给课程类存储条目（isCalendarLesson）
  */
 export function detailActionsFor(item: Occurrence, context: DetailActionContext): DetailAction[] {
   const actions: DetailAction[] = []
@@ -875,12 +884,13 @@ export function detailActionsFor(item: Occurrence, context: DetailActionContext)
   }
   else if (isEditableOccurrence(item)) {
     const suspended = isSuspended(item)
-    if (suspended && item.kind !== 'exam')
+    const lesson = isCalendarLesson(item)
+    if (suspended && lesson)
       actions.push({ key: 'hold', label: '照常上课（恢复显示并提醒）', primary: true, wide: true })
     actions.push({ key: 'edit', label: '编辑', primary: !suspended })
     if (item.kind !== 'exam' && !suspended)
       actions.push({ key: 'cancel_once', label: '本次停课', primary: false })
-    if (context.held)
+    if (context.held && lesson)
       actions.push({ key: 'unhold', label: '恢复按校历停课', primary: false })
     if (entry?.overrides?.length)
       actions.push({ key: 'reset', label: '恢复默认', primary: false })
