@@ -3,6 +3,7 @@ import type { EditScope, Entry, Occurrence } from '@/api/types/timetable'
 import type { DetailAction, DetailActionKey } from '@/utils/timetable'
 import { computed, ref } from 'vue'
 import {
+  clockOf,
   colorForOccurrence,
   describeCatalogMeta,
   describeCourseCode,
@@ -21,6 +22,8 @@ import {
  * 日程详情底部弹层（课表页与日视图共用）。
  * 只负责展示与收集操作意图：条目详情由父页面加载后传入，点操作按钮通过 action / edit 事件交给父页面执行。
  * 「编辑」在条目跨多周时先弹范围选择（仅本次 / 本次及以后 / 全部），再以 edit 事件带出范围。
+ * The week grid draws one occurrence per overlapping slot and passes the others as `overlaps`;
+ * they are listed as a switcher and picking one emits `switch`.
  */
 
 const props = withDefaults(defineProps<{
@@ -33,17 +36,21 @@ const props = withDefaults(defineProps<{
   hidden?: boolean
   /** 有操作在进行中，按钮全部禁用 */
   busy?: boolean
+  /** Other occurrences in the same slot of the week grid */
+  overlaps?: Occurrence[]
 }>(), {
   entry: null,
   entryLoading: false,
   entryError: '',
   hidden: false,
   busy: false,
+  overlaps: () => [],
 })
 
 const emit = defineEmits<{
   action: [key: Exclude<DetailActionKey, 'edit'>]
   edit: [scope: EditScope]
+  switch: [occurrence: Occurrence]
 }>()
 
 interface PopupInstance {
@@ -100,6 +107,15 @@ const detailRows = computed<{ icon: string, text: string, multiline?: boolean }[
   return rows
 })
 
+/** Switcher entries for the overlapping occurrences, earliest first */
+const overlapItems = computed(() => [...props.overlaps]
+  .sort((a, b) => a.start.localeCompare(b.start))
+  .map(item => ({
+    occurrence: item,
+    color: colorForOccurrence(item).fg,
+    meta: `${KIND_LABELS[item.kind] ?? ''} ${clockOf(item.start)}–${clockOf(item.end)}`,
+  })))
+
 const actions = computed<DetailAction[]>(() => (
   props.occurrence
     ? detailActionsFor(props.occurrence, { hidden: props.hidden, entry: props.entry })
@@ -130,6 +146,11 @@ function onAction(key: DetailActionKey) {
   emit('edit', 'all')
 }
 
+function onSwitch(occurrence: Occurrence) {
+  if (!props.busy)
+    emit('switch', occurrence)
+}
+
 function onScopeSelect(item: ScopeAction) {
   emit('edit', item.scope)
 }
@@ -157,6 +178,25 @@ defineExpose({ open, close })
             {{ roleLabel }}
           </view>
         </view>
+      </view>
+
+      <!-- 周视图同一时段只画一个日程，其余在这里切换 -->
+      <view v-if="overlapItems.length" class="mt-3">
+        <text class="block text-xs text-fg-3">同一时段还有 {{ overlapItems.length }} 项</text>
+        <scroll-view scroll-x class="overlap-switcher" :show-scrollbar="false" :enhanced="true">
+          <view
+            v-for="item in overlapItems"
+            :key="item.occurrence.id"
+            class="overlap-switcher__item"
+            @click="onSwitch(item.occurrence)"
+          >
+            <view class="overlap-switcher__chip active:bg-fill-active">
+              <view class="h-2 w-2 shrink-0 rounded-full" :style="{ backgroundColor: item.color }" />
+              <text class="overlap-switcher__title text-sm text-fg-1">{{ item.occurrence.title }}</text>
+              <text class="shrink-0 text-xs text-fg-3">{{ item.meta }}</text>
+            </view>
+          </view>
+        </scroll-view>
       </view>
 
       <view class="mt-4 text-sm text-fg-2 space-y-2">
@@ -235,5 +275,33 @@ defineExpose({ open, close })
 .detail-action {
   flex: 1 1 40%;
   margin: 0;
+}
+
+.overlap-switcher {
+  white-space: nowrap;
+}
+
+/* 72rpx chip + 8rpx above and below = 88rpx tap target */
+.overlap-switcher__item {
+  display: inline-block;
+  padding: 8rpx 16rpx 8rpx 0;
+  vertical-align: top;
+}
+
+.overlap-switcher__chip {
+  display: flex;
+  gap: 12rpx;
+  align-items: center;
+  min-height: 72rpx;
+  padding: 0 24rpx;
+  background: var(--yp-bg-fill);
+  border-radius: 999rpx;
+}
+
+.overlap-switcher__title {
+  max-width: 320rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
