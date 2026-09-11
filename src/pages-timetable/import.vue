@@ -3,6 +3,7 @@ import type { Binding } from '@/api/types/pku'
 import type { IcsOut, ImportOut, Settings, SettingsPatch, Term, TextDryRunOut, TextFormat } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import type { SubscribeOutcome } from '@/hooks/useClassReminder'
+import type { TimetableDensity } from '@/utils/timetable'
 import { onLoad } from '@dcloudio/uni-app'
 import { computed, nextTick, ref, watch } from 'vue'
 import { getBinding, pkuUnbind, updateConsents } from '@/api/pku'
@@ -29,9 +30,11 @@ import {
   describeSlot,
   filterSummary,
   formatDateTime,
+  readDensity,
   readPkuCredential,
   readShowHidden,
   readWeekendMode,
+  saveDensity,
   savePkuCredential,
   saveShowHidden,
   saveWeekendMode,
@@ -110,6 +113,12 @@ const savingKeys = ref<Record<string, boolean>>({})
 const showHidden = ref(readShowHidden())
 /** Opt-in: the week grid shows Saturday and Sunday unless this is switched on (device preference) */
 const hideWeekend = ref(readWeekendMode() === 'hide')
+/** Week-grid row height, saved for the signed-in account and cleared on logout */
+const DENSITY_OPTIONS: { value: TimetableDensity, label: string }[] = [
+  { value: 'compact', label: '紧凑' },
+  { value: 'relaxed', label: '宽松' },
+]
+const density = ref<TimetableDensity>(readDensity(userStore.userInfo.username))
 const ics = ref<IcsOut | null>(null)
 const icsLoading = ref(false)
 const filterSheet = ref<FilterSheetInstance | null>(null)
@@ -410,6 +419,13 @@ function handleShowHiddenChange(value: boolean) {
 function handleHideWeekendChange(value: boolean) {
   hideWeekend.value = value
   saveWeekendMode(value ? 'hide' : 'show')
+}
+
+function handleDensityChange(value: TimetableDensity) {
+  if (density.value === value)
+    return
+  density.value = value
+  saveDensity(userStore.userInfo.username, value)
 }
 
 function openFilter() {
@@ -878,6 +894,23 @@ onLoad((options) => {
             <text class="block text-xs text-fg-3">周视图不显示周六、周日两列；周末有日程时课表上方会提示</text>
           </view>
           <uv-switch :model-value="hideWeekend" size="22" :active-color="tokens.primary" @change="handleHideWeekendChange" />
+        </view>
+        <view class="flex items-center justify-between border-t border-line-light py-3">
+          <view class="min-w-0 flex-1 pr-3">
+            <text class="block text-sm text-fg-2">课表密度</text>
+            <text class="block text-xs text-fg-3">紧凑：一屏放下第 1–12 节；宽松：每节更高，格子里多显示教师，需要滚动</text>
+          </view>
+          <view class="flex shrink-0 rounded-full bg-fill p-1">
+            <view
+              v-for="option in DENSITY_OPTIONS"
+              :key="option.value"
+              class="density-option rounded-full px-4 py-2 text-center text-sm"
+              :class="density === option.value ? 'bg-card text-primary font-medium shadow-card' : 'text-fg-2'"
+              @click="handleDensityChange(option.value)"
+            >
+              {{ option.label }}
+            </view>
+          </view>
         </view>
 
         <view v-if="settings" class="mt-2 border-t border-line-light pt-3">

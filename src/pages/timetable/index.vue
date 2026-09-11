@@ -3,7 +3,7 @@ import type { Occurrence, WeekView } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
 import type { DetailSheetInstance } from '@/hooks/useOccurrenceDetail'
 import type { WeekDirection } from '@/hooks/useWeekSwipe'
-import type { PaletteColor, WeekendMode, WeekPickerItem } from '@/utils/timetable'
+import type { PaletteColor, TimetableDensity, WeekendMode, WeekPickerItem } from '@/utils/timetable'
 import type { GridMetrics, OverlapGroup } from '@/utils/timetable-grid'
 import { onLoad, onPullDownRefresh, onResize, onShareAppMessage, onShow, onUnload } from '@dcloudio/uni-app'
 import { computed, ref } from 'vue'
@@ -27,6 +27,7 @@ import {
   markSwipeHintSeen,
   occurrenceRowSpan,
   readCachedWeekView,
+  readDensity,
   readSwipeHintSeen,
   readWeekendMode,
   sectionRows,
@@ -34,6 +35,7 @@ import {
   suspendsClasses,
   weekCalendarNotes,
   WEEKDAY_LABELS,
+  weekGridRows,
   weekHeaderMark,
   weekPickerItems,
   weekSuspendedReason,
@@ -55,6 +57,7 @@ import {
   KIND_MARKERS,
   layoutBlockText,
   NAME_ONLY_BELOW_SECTIONS,
+  RELAXED_ROW_HEIGHT,
   resolveOverlaps,
   rowOffset,
   TITLE_LINE,
@@ -95,6 +98,8 @@ interface GridBlock {
   titleStyle: string
   roomStyle: string
   roomLines: number
+  /** 宽松 only: the teacher (the occurrence's subtitle) under the room */
+  teacherLines: number
   tagLines: number
   /** 旁 and the kind marker, in the top-left corner */
   markers: BlockMarker[]
@@ -163,6 +168,7 @@ const { syncing, syncPortal } = useTimetableSync()
 const { resubscribeSilently } = useClassReminder()
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
+const userStore = useUserStore()
 const {
   detail,
   entry: detailEntry,
@@ -213,28 +219,23 @@ function readWindowMetrics(): WindowMetrics {
 }
 
 const windowMetrics = ref<WindowMetrics>(readWindowMetrics())
+/** 紧凑 fits sections 1–12 to the window; 宽松 uses a fixed taller row and scrolls (saved per account) */
+const density = ref<TimetableDensity>(readDensity(userStore.userInfo.username))
 const term = computed(() => view.value?.term ?? null)
-const rows = computed(() => sectionRows(term.value))
-/** Rows with a thin band above them (lunch, dinner) */
-const breaks = computed(() => breakBoundaries(rows.value))
-/** Section rows share the window height left after the page chrome (see fitRowHeight) */
-const metrics = computed<GridMetrics>(() => ({
-  rowHeight: fitRowHeight({
+/** The term's section table; the fitted row height depends on it alone, so it holds from week to week */
+const sectionTable = computed(() => sectionRows(term.value))
+const rowHeight = computed(() => {
+  if (density.value === 'relaxed')
+    return RELAXED_ROW_HEIGHT
+  return fitRowHeight({
     windowHeightRpx: windowMetrics.value.heightRpx,
     safeBottomRpx: windowMetrics.value.safeBottomRpx,
-    sections: rows.value.length,
-    breaks: breaks.value.length,
-  }),
-  breaks: breaks.value,
-}))
-const rowHeight = computed(() => metrics.value.rowHeight)
-const gridHeight = computed(() => gridBodyHeight(rows.value.length, metrics.value))
+    sections: sectionTable.value.length,
+    breaks: breakBoundaries(sectionTable.value).length,
+  })
+})
 /** The axis shows a section's end time only when the row is tall enough for three lines */
 const showEndTimes = computed(() => rowHeight.value >= 80)
-const breakBands = computed(() => breaks.value.map(boundary => ({
-  key: `break-${boundary}`,
-  style: `top: ${rowOffset(boundary, metrics.value) - BREAK_HEIGHT}rpx; height: ${BREAK_HEIGHT}rpx`,
-})))
 const weekDates = computed(() => view.value?.week_dates ?? [])
 
 const visibleOccurrences = computed(() =>
@@ -248,6 +249,19 @@ const columnWidth = computed(() => 100 / columnCount.value)
 const hiddenWeekendCount = computed(() =>
   columnCount.value === 7 ? 0 : visibleOccurrences.value.filter(item => item.weekday > columnCount.value).length,
 )
+
+/** Occurrences drawn on the grid: the visible ones on the shown columns */
+const gridOccurrences = computed(() => visibleOccurrences.value.filter(item => item.weekday <= columnCount.value))
+/** The section table, plus clock rows when this week has occurrences before the first or after the last section */
+const rows = computed(() => weekGridRows(sectionTable.value, gridOccurrences.value))
+/** Rows with a thin band above them (lunch, dinner) */
+const breaks = computed(() => breakBoundaries(rows.value))
+const metrics = computed<GridMetrics>(() => ({ rowHeight: rowHeight.value, breaks: breaks.value }))
+const gridHeight = computed(() => gridBodyHeight(rows.value.length, metrics.value))
+const breakBands = computed(() => breaks.value.map(boundary => ({
+  key: `break-${boundary}`,
+  style: `top: ${rowOffset(boundary, metrics.value) - BREAK_HEIGHT}rpx; height: ${BREAK_HEIGHT}rpx`,
+})))
 
 /** Axis cell of a row; a row after a break carries the band as its top border */
 function axisCellStyle(rowIndex: number) {
@@ -307,6 +321,7 @@ function toBlock(group: OverlapGroup): GridBlock {
   const layout = layoutBlockText({
     title: occurrence.title,
     room: occurrence.location,
+    teacher: density.value === 'relaxed' && span.span >= 2 ? occurrence.subtitle : '',
     tag: occurrence.tag ?? '',
     widthRpx: GRID_BODY_WIDTH / columnCount.value - BLOCK_GAP - BLOCK_PAD_LEFT - BLOCK_PAD_RIGHT - BLOCK_EDGE,
     heightRpx: height - padY * 2 - (framed ? 4 : 0),
@@ -321,6 +336,7 @@ function toBlock(group: OverlapGroup): GridBlock {
     titleStyle: `-webkit-line-clamp: ${layout.titleLines}; text-indent: ${indent}rpx`,
     roomStyle: `-webkit-line-clamp: ${layout.roomLines}`,
     roomLines: layout.roomLines,
+    teacherLines: layout.teacherLines,
     tagLines: layout.tagLines,
     markers,
     modified: !!occurrence.modified,
@@ -331,9 +347,7 @@ function toBlock(group: OverlapGroup): GridBlock {
 
 /** One block per group of overlapping occurrences, drawn at full column width */
 const blocks = computed<GridBlock[]>(() =>
-  resolveOverlaps(visibleOccurrences.value, item => occurrenceRowSpan(item, rows.value))
-    .filter(group => group.primary.weekday <= columnCount.value)
-    .map(toBlock),
+  resolveOverlaps(gridOccurrences.value, item => occurrenceRowSpan(item, rows.value)).map(toBlock),
 )
 
 const detailOverlaps = computed(() => detailGroup.value.filter(item => item.id !== detail.value?.id))
@@ -414,7 +428,6 @@ const weekCells = computed<WeekCell[]>(() => {
   })
 })
 
-const userStore = useUserStore()
 let requestSeq = 0
 
 /** Week views fetched while the page is open, keyed by `term:week`, so a swipe can show a week at once */
@@ -699,6 +712,7 @@ onShow(() => {
   // 导入页可能改了本机隐藏偏好与周末列设置；从其它页返回时刷新数据
   reloadLocalPrefs()
   weekendMode.value = readWeekendMode()
+  density.value = readDensity(userStore.userInfo.username)
   if (shownBefore)
     void refresh()
   shownBefore = true
@@ -821,13 +835,14 @@ onShareAppMessage(() => ({
             <view class="shrink-0" :style="{ width: `${GRID_AXIS_WIDTH}rpx` }">
               <view
                 v-for="(row, rowIndex) in rows"
-                :key="row.section"
+                :key="`axis-${row.section}-${row.start}`"
                 class="box-border flex flex-col items-center justify-center border-b border-line-light"
                 :style="axisCellStyle(rowIndex)"
               >
-                <text class="grid-axis__section">{{ row.section }}</text>
-                <text class="grid-axis__time">{{ row.start }}</text>
-                <text v-if="showEndTimes" class="grid-axis__time">{{ row.end }}</text>
+                <!-- 节次表以外的时段（早于第 1 节、晚于第 12 节）只标起止时刻 -->
+                <text v-if="row.section" class="grid-axis__section">{{ row.section }}</text>
+                <text class="grid-axis__time" :class="{ 'grid-axis__time--clock': !row.section }">{{ row.start }}</text>
+                <text v-if="showEndTimes || !row.section" class="grid-axis__time" :class="{ 'grid-axis__time--clock': !row.section }">{{ row.end }}</text>
               </view>
             </view>
 
@@ -846,7 +861,7 @@ onShareAppMessage(() => ({
               <view v-for="band in breakBands" :key="band.key" class="grid-break" :style="band.style" />
               <view
                 v-for="(row, rowIndex) in rows"
-                :key="`row-${row.section}`"
+                :key="`row-${row.section}-${row.start}`"
                 class="absolute left-0 right-0 border-b border-line-light"
                 :style="{ top: `${rowLineTop(rowIndex)}rpx` }"
               />
@@ -873,6 +888,7 @@ onShareAppMessage(() => ({
                 <view v-if="block.modified" class="grid-block__dot" />
                 <text class="grid-block__title" :class="{ 'line-through': block.canceled }" :style="block.titleStyle">{{ block.occurrence.title }}</text>
                 <text v-if="block.roomLines" class="grid-block__room" :style="block.roomStyle">{{ block.occurrence.location }}</text>
+                <text v-if="block.teacherLines" class="grid-block__teacher">{{ block.occurrence.subtitle }}</text>
                 <text v-if="block.tagLines" class="grid-block__tag">#{{ block.occurrence.tag }}</text>
                 <!-- 同一时段被盖住的其它日程数；点开详情可切换 -->
                 <text v-if="block.others.length" class="grid-block__more" :style="block.moreStyle">+{{ block.others.length }}</text>
@@ -1118,6 +1134,11 @@ onShareAppMessage(() => ({
   color: var(--yp-text-3);
 }
 
+.grid-axis__time--clock {
+  font-weight: 500;
+  color: var(--yp-text-2);
+}
+
 .grid-break {
   position: absolute;
   right: 0;
@@ -1150,6 +1171,7 @@ onShareAppMessage(() => ({
   opacity: 0.8;
 }
 
+.grid-block__teacher,
 .grid-block__tag {
   display: block;
   overflow: hidden;

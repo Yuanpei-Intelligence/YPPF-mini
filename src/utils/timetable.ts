@@ -124,6 +124,7 @@ export function colorForOccurrence(occurrence: Occurrence): PaletteColor {
 }
 
 export interface SectionRow {
+  /** 1-based section number; 0 for a clock row added outside the section table (weekGridRows) */
   section: number
   start: string
   end: string
@@ -165,10 +166,15 @@ export function timeToMinutes(time: string): number {
 }
 
 /**
- * 把时刻换算成以“行”为单位的纵向位置：落在某节内按比例插值，落在课间则贴到下一节起点
+ * 把时刻换算成以“行”为单位的纵向位置：落在某节内按比例插值，落在课间则贴到下一节起点。
+ * Times beyond the rows clamp to their edges, so a week with early or late occurrences needs weekGridRows().
  */
 export function timeToRowPosition(time: string, rows: SectionRow[]): number {
-  const minutes = timeToMinutes(time)
+  return minutesToRowPosition(timeToMinutes(time), rows)
+}
+
+/** timeToRowPosition for minutes since midnight (1440 = 24:00) */
+export function minutesToRowPosition(minutes: number, rows: SectionRow[]): number {
   if (!rows.length)
     return 0
   if (minutes <= timeToMinutes(rows[0].start))
@@ -196,6 +202,62 @@ export function clockOf(datetime: string): string {
   return datetime.length >= 16 ? datetime.slice(11, 16) : datetime
 }
 
+/** Minutes in a day; an end at 24:00 is DAY_MINUTES */
+export const DAY_MINUTES = 24 * 60
+
+/** `HH:MM` for minutes since midnight, clamped to 00:00–24:00 */
+export function minutesToClock(minutes: number): string {
+  const clamped = Math.min(Math.max(Math.round(minutes), 0), DAY_MINUTES)
+  return `${pad2(Math.floor(clamped / 60))}:${pad2(clamped % 60)}`
+}
+
+/** The occurrence ends on a later date (activities and appointments may cross midnight) or at 23:59 */
+function endsAtMidnight(occurrence: Pick<Occurrence, 'start' | 'end'>): boolean {
+  return clockOf(occurrence.end) === '23:59' || occurrence.end.slice(0, 10) > occurrence.start.slice(0, 10)
+}
+
+/** Start and end in minutes on the start day; an end at 23:59 or on a later date counts as 24:00 */
+export function occurrenceMinutes(occurrence: Pick<Occurrence, 'start' | 'end'>): { start: number, end: number } {
+  const start = timeToMinutes(clockOf(occurrence.start))
+  const end = endsAtMidnight(occurrence) ? DAY_MINUTES : timeToMinutes(clockOf(occurrence.end))
+  return { start, end: Math.max(end, start) }
+}
+
+/** End time for display: `24:00` for an end at 23:59 or on a later date */
+export function displayEndClock(occurrence: Pick<Occurrence, 'start' | 'end'>): string {
+  return endsAtMidnight(occurrence) ? minutesToClock(DAY_MINUTES) : clockOf(occurrence.end)
+}
+
+/** Length of the clock rows added before the first or after the last section (minutes) */
+const CLOCK_ROW_MINUTES = 60
+
+/**
+ * The rows a week's grid shows: the section table, plus clock rows (section 0) only as far as needed to
+ * cover the earliest start and the latest end of `occurrences` — hourly back from the first section
+ * (07:00–08:00, 06:00–07:00 …) and hourly on from the last one, ending at 24:00 (21:30–22:30,
+ * 22:30–23:30, 23:30–24:00). A week without such occurrences gets the section table unchanged.
+ */
+export function weekGridRows(sections: SectionRow[], occurrences: Pick<Occurrence, 'start' | 'end'>[]): SectionRow[] {
+  if (!sections.length)
+    return sections
+  const first = timeToMinutes(sections[0].start)
+  const last = timeToMinutes(sections[sections.length - 1].end)
+  let earliest = first
+  let latest = last
+  for (const occurrence of occurrences) {
+    const { start, end } = occurrenceMinutes(occurrence)
+    earliest = Math.min(earliest, start)
+    latest = Math.max(latest, end)
+  }
+  const before: SectionRow[] = []
+  for (let end = first; end > earliest && end > 0; end -= CLOCK_ROW_MINUTES)
+    before.unshift({ section: 0, start: minutesToClock(end - CLOCK_ROW_MINUTES), end: minutesToClock(end) })
+  const after: SectionRow[] = []
+  for (let start = last; start < latest && start < DAY_MINUTES; start += CLOCK_ROW_MINUTES)
+    after.push({ section: 0, start: minutesToClock(start), end: minutesToClock(start + CLOCK_ROW_MINUTES) })
+  return before.length || after.length ? [...before, ...sections, ...after] : sections
+}
+
 /**
  * 日程在网格里的纵向位置：有节次的按节次，没有节次（自定义时间）的按时刻
  */
@@ -208,8 +270,9 @@ export function occurrenceRowSpan(occurrence: Occurrence, rows: SectionRow[]): R
     const bottom = endIndex >= 0 ? endIndex + 1 : Math.min(end_section, rows.length)
     return { top, span: Math.max(bottom - top, 1) }
   }
-  const top = timeToRowPosition(clockOf(occurrence.start), rows)
-  const bottom = timeToRowPosition(clockOf(occurrence.end), rows)
+  const { start, end } = occurrenceMinutes(occurrence)
+  const top = minutesToRowPosition(start, rows)
+  const bottom = minutesToRowPosition(end, rows)
   return { top, span: Math.max(bottom - top, 0.5) }
 }
 
@@ -630,7 +693,7 @@ export function describeSections(start: number | null | undefined, end: number |
 export function describeOccurrenceTime(item: Occurrence): string {
   const parts = [
     `${chineseDate(item.date)} 周${WEEKDAY_LABELS[item.weekday - 1] ?? ''}`,
-    `${clockOf(item.start)}–${clockOf(item.end)}`,
+    `${clockOf(item.start)}–${displayEndClock(item)}`,
   ]
   const sections = describeSections(item.start_section, item.end_section)
   if (sections)
@@ -915,6 +978,17 @@ export function readLocalHiddenIds(account: string): string[] {
 
 export function saveLocalHiddenIds(account: string, ids: string[]) {
   writePersonalStorage(PERSONAL_STORAGE_KEYS.hiddenIds, account, ids)
+}
+
+/** Week-grid density: compact fits sections 1–12 to the screen, relaxed uses taller rows and scrolls */
+export type TimetableDensity = 'compact' | 'relaxed'
+
+export function readDensity(account: string): TimetableDensity {
+  return readPersonalStorage<string>(PERSONAL_STORAGE_KEYS.density, account) === 'relaxed' ? 'relaxed' : 'compact'
+}
+
+export function saveDensity(account: string, density: TimetableDensity) {
+  writePersonalStorage(PERSONAL_STORAGE_KEYS.density, account, density)
 }
 
 export function readShowHidden(): boolean {

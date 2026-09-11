@@ -22,6 +22,8 @@ export const GRID_BODY_WIDTH = 750 - GRID_CARD_MARGIN * 2 - GRID_AXIS_WIDTH
 /** A section row is fitted to the window between these heights */
 export const ROW_HEIGHT_MIN = 72
 export const ROW_HEIGHT_MAX = 100
+/** 宽松 density: a fixed, taller row that scrolls and leaves room for the teacher */
+export const RELAXED_ROW_HEIGHT = 116
 /** Thin band drawn for a long gap between sections (lunch, dinner) instead of a row */
 export const BREAK_HEIGHT = 12
 /** Gaps between two sections at least this long (minutes) get a band */
@@ -232,6 +234,8 @@ export function estimateLines(text: string, widthRpx: number, fontRpx: number, i
 export interface BlockTextInput {
   title: string
   room: string
+  /** Shown in 宽松 blocks of two sections or more; '' otherwise */
+  teacher: string
   tag: string
   /** Content box of the block, after border and padding */
   widthRpx: number
@@ -250,12 +254,15 @@ export interface BlockTextLayout {
   /** Room lines (ROOM_LINE each); 0 when the name leaves no room */
   roomLines: number
   /** 0 or 1 */
+  teacherLines: number
+  /** 0 or 1 */
   tagLines: number
 }
 
 /**
  * Share a block's height out in priority order: the name first (as many lines as it needs), then the
- * room (up to two lines), then the tag. Lines still left go to the name's clamp, so an underestimated
+ * room (up to two lines), then the teacher and the tag (a line each). Lines still left go to the name's
+ * clamp, so an underestimated
  * name ends in an ellipsis instead of pushing the room out of the block.
  */
 export function layoutBlockText(input: BlockTextInput): BlockTextLayout {
@@ -263,7 +270,7 @@ export function layoutBlockText(input: BlockTextInput): BlockTextLayout {
   const usable = reserveMore ? input.heightRpx - input.moreRpx : input.heightRpx
   const titleMax = Math.max(Math.floor(usable / TITLE_LINE), 1)
   if (input.nameOnly)
-    return { titleLines: titleMax, roomLines: 0, tagLines: 0 }
+    return { titleLines: titleMax, roomLines: 0, teacherLines: 0, tagLines: 0 }
   const titleNeed = Math.max(estimateLines(input.title, input.widthRpx, TITLE_FONT, input.indentRpx), 1)
   const titleLines = Math.min(titleNeed, titleMax)
   let left = usable - titleLines * TITLE_LINE
@@ -271,7 +278,9 @@ export function layoutBlockText(input: BlockTextInput): BlockTextLayout {
     ? Math.min(estimateLines(input.room, input.widthRpx, ROOM_FONT), Math.floor(left / ROOM_LINE), 2)
     : 0
   left -= roomLines * ROOM_LINE
+  const teacherLines = input.teacher && left >= ROOM_LINE ? 1 : 0
+  left -= teacherLines * ROOM_LINE
   const tagLines = input.tag && left >= ROOM_LINE ? 1 : 0
   left -= tagLines * ROOM_LINE
-  return { titleLines: titleLines + Math.floor(left / TITLE_LINE), roomLines, tagLines }
+  return { titleLines: titleLines + Math.floor(left / TITLE_LINE), roomLines, teacherLines, tagLines }
 }
