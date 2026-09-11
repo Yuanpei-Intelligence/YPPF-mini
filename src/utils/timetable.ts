@@ -173,7 +173,7 @@ export function timeToRowPosition(time: string, rows: SectionRow[]): number {
   return minutesToRowPosition(timeToMinutes(time), rows)
 }
 
-/** timeToRowPosition for minutes since midnight (1440 = 24:00) */
+/** timeToRowPosition for minutes since midnight (1440 = 24:00), e.g. from spanMinutes() */
 export function minutesToRowPosition(minutes: number, rows: SectionRow[]): number {
   if (!rows.length)
     return 0
@@ -211,43 +211,92 @@ export function minutesToClock(minutes: number): string {
   return `${pad2(Math.floor(clamped / 60))}:${pad2(clamped % 60)}`
 }
 
-/** The occurrence ends on a later date (activities and appointments may cross midnight) or at 23:59 */
-function endsAtMidnight(occurrence: Pick<Occurrence, 'start' | 'end'>): boolean {
-  return clockOf(occurrence.end) === '23:59' || occurrence.end.slice(0, 10) > occurrence.start.slice(0, 10)
+/*
+ * Shared time-span helpers (week grid, day view, home agenda, entry form, poster). A time is an ISO
+ * datetime (`YYYY-MM-DDTHH:MM[:SS]`) or a bare clock (`HH:MM`); a TimeSpan is `{ start, end }` in either
+ * form. All results are on the span's start day: minutes 0–1440, with 1440 meaning 24:00.
+ */
+
+export interface TimeSpan {
+  start: string
+  end: string
 }
 
-/** Start and end in minutes on the start day; an end at 23:59 or on a later date counts as 24:00 */
-export function occurrenceMinutes(occurrence: Pick<Occurrence, 'start' | 'end'>): { start: number, end: number } {
-  const start = timeToMinutes(clockOf(occurrence.start))
-  const end = endsAtMidnight(occurrence) ? DAY_MINUTES : timeToMinutes(clockOf(occurrence.end))
-  return { start, end: Math.max(end, start) }
+/** The last minute a time picker offers; an end at 23:59 stands for 24:00 (the entry form sends it for 结束于 24:00) */
+export const LAST_MINUTE = '23:59'
+
+const DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}[T ]/
+
+/** `YYYY-MM-DD` of an ISO datetime; '' for a bare clock */
+function datePart(time: string): string {
+  return DATE_PREFIX_RE.test(time) ? time.slice(0, 10) : ''
 }
 
-/** End time for display: `24:00` for an end at 23:59 or on a later date */
-export function displayEndClock(occurrence: Pick<Occurrence, 'start' | 'end'>): string {
-  return endsAtMidnight(occurrence) ? minutesToClock(DAY_MINUTES) : clockOf(occurrence.end)
+/** `HH:MM` of an ISO datetime or of a bare clock */
+function clockPart(time: string): string {
+  return datePart(time) ? time.slice(11, 16) : time.slice(0, 5)
+}
+
+/**
+ * Start and end of a span in minutes on its start day, or null when it has no length.
+ * - Dates are compared only when both times carry one: an end on a later date counts as 24:00, an end on
+ *   an earlier date makes the span invalid (null).
+ * - For bare clocks (or mixed forms) an end before the start crosses midnight and counts as 24:00.
+ * - An end at 23:59 counts as 24:00.
+ */
+export function spanMinutes(start: string, end: string): { start: number, end: number } | null {
+  const from = timeToMinutes(clockPart(start))
+  const endClock = clockPart(end)
+  let to = endClock === LAST_MINUTE ? DAY_MINUTES : timeToMinutes(endClock)
+  const startDate = datePart(start)
+  const endDate = datePart(end)
+  if (startDate && endDate) {
+    if (endDate > startDate)
+      to = DAY_MINUTES
+    else if (endDate < startDate)
+      return null
+  }
+  else if (to < from) {
+    to = DAY_MINUTES
+  }
+  return to > from ? { start: from, end: Math.min(to, DAY_MINUTES) } : null
+}
+
+/** A clock for display: `23:59` reads `24:00`, anything else is unchanged */
+export function displayClock(clock: string): string {
+  return clock === LAST_MINUTE ? minutesToClock(DAY_MINUTES) : clock
+}
+
+/** End time of a span for display: `24:00` when it ends at 23:59 or runs past midnight, otherwise its end clock */
+export function displayEndClock(span: TimeSpan): string {
+  const minutes = spanMinutes(span.start, span.end)
+  return minutes?.end === DAY_MINUTES ? minutesToClock(DAY_MINUTES) : displayClock(clockPart(span.end))
 }
 
 /** Length of the clock rows added before the first or after the last section (minutes) */
 const CLOCK_ROW_MINUTES = 60
 
 /**
- * The rows a week's grid shows: the section table, plus clock rows (section 0) only as far as needed to
- * cover the earliest start and the latest end of `occurrences` — hourly back from the first section
- * (07:00–08:00, 06:00–07:00 …) and hourly on from the last one, ending at 24:00 (21:30–22:30,
- * 22:30–23:30, 23:30–24:00). A week without such occurrences gets the section table unchanged.
+ * The rows a week's grid shows: the term's section table (sectionRows), plus clock rows with `section: 0`
+ * only as far as `spans` reach outside it. Clock rows are 60 minutes, anchored at the table's first start
+ * and last end — 07:00–08:00, 06:00–07:00 … before; 21:30–22:30, 22:30–23:30, 23:30–24:00 after — with the
+ * outermost row trimmed to 00:00 or 24:00. Spans without length are ignored; when nothing reaches outside,
+ * the section table is returned unchanged.
  */
-export function weekGridRows(sections: SectionRow[], occurrences: Pick<Occurrence, 'start' | 'end'>[]): SectionRow[] {
+export function weekGridRows(term: Term | null | undefined, spans: TimeSpan[]): SectionRow[] {
+  const sections = sectionRows(term)
   if (!sections.length)
     return sections
   const first = timeToMinutes(sections[0].start)
   const last = timeToMinutes(sections[sections.length - 1].end)
   let earliest = first
   let latest = last
-  for (const occurrence of occurrences) {
-    const { start, end } = occurrenceMinutes(occurrence)
-    earliest = Math.min(earliest, start)
-    latest = Math.max(latest, end)
+  for (const span of spans) {
+    const minutes = spanMinutes(span.start, span.end)
+    if (!minutes)
+      continue
+    earliest = Math.min(earliest, minutes.start)
+    latest = Math.max(latest, minutes.end)
   }
   const before: SectionRow[] = []
   for (let end = first; end > earliest && end > 0; end -= CLOCK_ROW_MINUTES)
@@ -270,9 +319,10 @@ export function occurrenceRowSpan(occurrence: Occurrence, rows: SectionRow[]): R
     const bottom = endIndex >= 0 ? endIndex + 1 : Math.min(end_section, rows.length)
     return { top, span: Math.max(bottom - top, 1) }
   }
-  const { start, end } = occurrenceMinutes(occurrence)
-  const top = minutesToRowPosition(start, rows)
-  const bottom = minutesToRowPosition(end, rows)
+  const minutes = spanMinutes(occurrence.start, occurrence.end)
+  // A span without length still gets a half-row sliver at its start
+  const top = minutesToRowPosition(minutes ? minutes.start : timeToMinutes(clockOf(occurrence.start)), rows)
+  const bottom = minutes ? minutesToRowPosition(minutes.end, rows) : top
   return { top, span: Math.max(bottom - top, 0.5) }
 }
 

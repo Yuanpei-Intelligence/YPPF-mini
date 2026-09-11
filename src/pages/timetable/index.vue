@@ -253,7 +253,7 @@ const hiddenWeekendCount = computed(() =>
 /** Occurrences drawn on the grid: the visible ones on the shown columns */
 const gridOccurrences = computed(() => visibleOccurrences.value.filter(item => item.weekday <= columnCount.value))
 /** The section table, plus clock rows when this week has occurrences before the first or after the last section */
-const rows = computed(() => weekGridRows(sectionTable.value, gridOccurrences.value))
+const rows = computed(() => weekGridRows(term.value, gridOccurrences.value))
 /** Rows with a thin band above them (lunch, dinner) */
 const breaks = computed(() => breakBoundaries(rows.value))
 const metrics = computed<GridMetrics>(() => ({ rowHeight: rowHeight.value, breaks: breaks.value }))
