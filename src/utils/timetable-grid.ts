@@ -145,6 +145,27 @@ export function gridBodyHeight(rowCount: number, metrics: GridMetrics): number {
   return rowCount * metrics.rowHeight + metrics.breaks.length * BREAK_HEIGHT
 }
 
+/*
+ * The section axis and the grid body both place bands, row lines and labels at absolute tops from these offsets,
+ * never as a stack of row-high boxes: the runtime floors every rpx length to whole px on its own (74rpx → 38px at
+ * 390px wide), so a stack loses the remainder on every row and drifts, while an absolute top is off by under 1px.
+ */
+
+/** Top (rpx) of the band above row `boundary` */
+export function bandTop(boundary: number, metrics: GridMetrics): number {
+  return rowOffset(boundary, metrics) - BREAK_HEIGHT
+}
+
+/** Top (rpx) of the 早间 / 晚间 label on the band above row `boundary`, overhanging the band evenly */
+export function zoneLabelTop(boundary: number, metrics: GridMetrics): number {
+  return bandTop(boundary, metrics) - (ZONE_LABEL_HEIGHT - BREAK_HEIGHT) / 2
+}
+
+/** Top (rpx) of the separator at the bottom of a row, above the band when one follows */
+export function rowLineTop(rowIndex: number, metrics: GridMetrics): number {
+  return rowOffset(rowIndex + 1, metrics, 'bottom') - 1
+}
+
 /* -------------------- Blocks -------------------- */
 
 /** Space between neighbouring blocks, horizontally and vertically */

@@ -42,6 +42,7 @@ import {
 } from '@/utils/timetable'
 import {
   bandBoundaries,
+  bandTop,
   BLOCK_EDGE,
   BLOCK_GAP,
   BLOCK_MARKER_SIZE,
@@ -60,11 +61,13 @@ import {
   NAME_ONLY_BELOW_SECTIONS,
   RELAXED_ROW_HEIGHT,
   resolveOverlaps,
+  rowLineTop,
   rowOffset,
   TITLE_LINE,
   ZONE_LABEL_HEIGHT,
   ZONE_LABELS,
   zoneBoundaries,
+  zoneLabelTop,
 } from '@/utils/timetable-grid'
 
 definePage({
@@ -262,30 +265,27 @@ const rows = computed(() => weekGridRows(term.value, gridOccurrences.value))
 const breaks = computed(() => bandBoundaries(rows.value))
 const metrics = computed<GridMetrics>(() => ({ rowHeight: rowHeight.value, breaks: breaks.value }))
 const gridHeight = computed(() => gridBodyHeight(rows.value.length, metrics.value))
+/** Bands and row lines are drawn in both the section axis and the grid, from the same tops */
 const breakBands = computed(() => breaks.value.map(boundary => ({
   key: `break-${boundary}`,
-  style: `top: ${rowOffset(boundary, metrics.value) - BREAK_HEIGHT}rpx; height: ${BREAK_HEIGHT}rpx`,
+  style: `top: ${bandTop(boundary, metrics.value)}rpx; height: ${BREAK_HEIGHT}rpx`,
+})))
+const rowLines = computed(() => rows.value.map((row, rowIndex) => ({
+  key: `${row.section}-${row.start}`,
+  style: `top: ${rowLineTop(rowIndex, metrics.value)}rpx`,
+})))
+/** Axis labels, one per row, placed at the row's own offset like the grid's blocks */
+const axisCells = computed(() => rows.value.map((row, rowIndex) => ({
+  row,
+  key: `axis-${row.section}-${row.start}`,
+  style: `top: ${rowOffset(rowIndex, metrics.value)}rpx; height: ${rowHeight.value}rpx`,
 })))
 /** 早间 / 晚间 on the zone bands, centred on the band in the section axis */
 const zoneLabels = computed(() => zoneBoundaries(rows.value).map(boundary => ({
   key: `zone-${boundary.zone}`,
   label: ZONE_LABELS[boundary.zone],
-  style: `top: ${rowOffset(boundary.index, metrics.value) - BREAK_HEIGHT - (ZONE_LABEL_HEIGHT - BREAK_HEIGHT) / 2}rpx; height: ${ZONE_LABEL_HEIGHT}rpx`,
+  style: `top: ${zoneLabelTop(boundary.index, metrics.value)}rpx; height: ${ZONE_LABEL_HEIGHT}rpx`,
 })))
-
-/** Axis cell of a row; a row after a break carries the band as its top border */
-function axisCellStyle(rowIndex: number) {
-  const band = breaks.value.includes(rowIndex) ? BREAK_HEIGHT : 0
-  const parts = [`height: ${rowHeight.value + band}rpx`]
-  if (band)
-    parts.push(`border-top: ${band}rpx solid var(--yp-bg-fill)`)
-  return parts.join('; ')
-}
-
-/** Separator at the bottom of a row, above the band when a break follows */
-function rowLineTop(rowIndex: number) {
-  return rowOffset(rowIndex + 1, metrics.value, 'bottom') - 1
-}
 
 function blockStyle(occurrence: Occurrence, color: PaletteColor, top: number, height: number, padY: number) {
   const column = Math.min(Math.max(occurrence.weekday, 1), 7) - 1
@@ -856,19 +856,22 @@ onShareAppMessage(() => ({
           </view>
 
           <view class="flex">
-            <view class="relative shrink-0" :style="{ width: `${GRID_AXIS_WIDTH}rpx` }">
+            <!-- 节次列的分隔带、行线和文字都与右侧格子一样按行位置绝对定位，不逐格堆叠，带才与格子里的对齐 -->
+            <view class="relative shrink-0" :style="{ width: `${GRID_AXIS_WIDTH}rpx`, height: `${gridHeight}rpx` }">
+              <view v-for="band in breakBands" :key="`axis-${band.key}`" class="grid-break" :style="band.style" />
               <view
-                v-for="(row, rowIndex) in rows"
-                :key="`axis-${row.section}-${row.start}`"
-                class="box-border flex flex-col items-center justify-center border-b border-line-light"
-                :style="axisCellStyle(rowIndex)"
-              >
+                v-for="line in rowLines"
+                :key="`axis-row-${line.key}`"
+                class="absolute left-0 right-0 border-b border-line-light"
+                :style="line.style"
+              />
+              <view v-for="cell in axisCells" :key="cell.key" class="grid-axis__cell" :style="cell.style">
                 <!-- 节次表以外的时刻行：编号位留空，只写开始时间，样式与位置同节次时间；结束时间占位但不显示 -->
                 <view class="grid-axis__number">
-                  <text v-if="row.section" class="grid-axis__section">{{ row.section }}</text>
+                  <text v-if="cell.row.section" class="grid-axis__section">{{ cell.row.section }}</text>
                 </view>
-                <text class="grid-axis__time">{{ row.start }}</text>
-                <text v-if="showEndTimes" class="grid-axis__time" :class="{ 'grid-axis__time--hidden': !row.section }">{{ row.end }}</text>
+                <text class="grid-axis__time">{{ cell.row.start }}</text>
+                <text v-if="showEndTimes" class="grid-axis__time" :class="{ 'grid-axis__time--hidden': !cell.row.section }">{{ cell.row.end }}</text>
               </view>
               <!-- 时刻行与节次表相接处的分隔带上标「早间 / 晚间」，与课间休息的带区分开 -->
               <text v-for="zone in zoneLabels" :key="zone.key" class="grid-zone-label" :style="zone.style">{{ zone.label }}</text>
@@ -888,10 +891,10 @@ onShareAppMessage(() => ({
               <!-- 午饭、晚饭时段只画一条细带，不占一整行 -->
               <view v-for="band in breakBands" :key="band.key" class="grid-break" :style="band.style" />
               <view
-                v-for="(row, rowIndex) in rows"
-                :key="`row-${row.section}-${row.start}`"
+                v-for="line in rowLines"
+                :key="`row-${line.key}`"
                 class="absolute left-0 right-0 border-b border-line-light"
-                :style="{ top: `${rowLineTop(rowIndex)}rpx` }"
+                :style="line.style"
               />
 
               <view
@@ -1149,6 +1152,19 @@ onShareAppMessage(() => ({
 }
 
 /* The section axis stays narrow so the seven day columns keep their width */
+/* One row's label at the row's offset; the 1px bottom padding centres it above the row line, as a border did */
+.grid-axis__cell {
+  position: absolute;
+  right: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 1px;
+}
+
 /* Same height with or without a number, so a clock row's start time sits where a section's does */
 .grid-axis__number {
   display: flex;
