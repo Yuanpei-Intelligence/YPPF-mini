@@ -5,16 +5,21 @@ import {
   chineseDate,
   clockOf,
   describeSections,
+  displayClock,
+  displayEndClock,
   KIND_BADGES,
+  minutesToRowPosition,
+  spanMinutes,
   timeToMinutes,
   timeToRowPosition,
   WEEKDAY_LABELS,
   weekdayOf,
 } from '@/utils/timetable'
+import { breakBoundaries } from '@/utils/timetable-grid'
 
 /*
- * 整学期课表海报的排版计算：行（节次与节次表之外的钟点行）、列、同一时段的课怎样堆叠、
- * 文字折行、行高与课间分隔、考试安排的文案。钟点行也给本周海报用。
+ * 整学期课表海报的排版计算：列、同一时段的课怎样堆叠、文字折行、行高与课间分隔、考试安排的文案。
+ * 行（节次与节次表之外的钟点行）由 utils/timetable 的 weekGridRows 给出，与课表页同一套时间轴。
  * 只算位置不画图（绘制在 pages-timetable/poster.vue）。文字宽度由调用方传入的 measure 给出，
  * 排版与绘制用同一个 canvas 的字体度量，量得下的就画得下。
  */
@@ -150,103 +155,6 @@ export function wrapLines(text: string, maxWidth: number, measure: (value: strin
   return lines
 }
 
-/* -------------------- 行：节次与钟点行 -------------------- */
-
-/** 海报的一行：节次表里的一节，或节次表之外按钟点补出来的一段（clock 为 true，section 为 0） */
-export interface PosterRow extends SectionRow {
-  clock?: boolean
-}
-
-/** 有起止时刻的日程（`HH:MM` 或日期时间） */
-export interface TimeSpan {
-  start: string
-  end: string
-}
-
-const DAY_END_MINUTES = 24 * 60
-
-/** 分钟数 -> `HH:MM`；一天结束写 `24:00` */
-export function formatMinutes(minutes: number): string {
-  const hour = Math.floor(minutes / 60)
-  const minute = minutes % 60
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
-}
-
-/** 起止时刻换成分钟；结束于 23:59 或跨到次日（早于开始）的按 24:00 算 */
-export function spanMinutes(start: string, end: string): { start: number, end: number } {
-  const from = timeToMinutes(clockOf(start))
-  let to = timeToMinutes(clockOf(end))
-  if (to === DAY_END_MINUTES - 1 || to < from)
-    to = DAY_END_MINUTES
-  return { start: from, end: to }
-}
-
-/**
- * 节次表只覆盖首节上课到末节下课（如 08:00–21:30）。有日程早于首节或晚于末节时在前后补钟点行：
- * 行界取这些日程的开始（前）/ 结束（后）时刻，刚好盖住它们；都在节次表之内时原样返回。
- */
-export function withClockRows(rows: SectionRow[], spans: TimeSpan[]): PosterRow[] {
-  if (!rows.length || !spans.length)
-    return rows
-  const first = timeToMinutes(rows[0].start)
-  const last = timeToMinutes(rows[rows.length - 1].end)
-  const early = new Set<number>()
-  const late = new Set<number>()
-  for (const item of spans) {
-    const { start, end } = spanMinutes(item.start, item.end)
-    if (start < first)
-      early.add(start)
-    if (end > last)
-      late.add(end)
-  }
-  if (!early.size && !late.size)
-    return rows
-  const starts = Array.from(early).sort((a, b) => a - b)
-  const ends = Array.from(late).sort((a, b) => a - b)
-  const head: PosterRow[] = starts.map((minutes, index) => ({
-    section: 0,
-    clock: true,
-    start: formatMinutes(minutes),
-    end: formatMinutes(starts[index + 1] ?? first),
-  }))
-  const tail: PosterRow[] = ends.map((minutes, index) => ({
-    section: 0,
-    clock: true,
-    start: formatMinutes(index ? ends[index - 1] : last),
-    end: formatMinutes(minutes),
-  }))
-  return [...head, ...rows, ...tail]
-}
-
-/** 节次表部分在行列表里的首末下标 */
-function sectionBounds(rows: PosterRow[]): { first: number, last: number } {
-  const first = Math.max(rows.findIndex(row => !row.clock), 0)
-  let last = rows.length - 1
-  while (last > first && rows[last].clock)
-    last--
-  return { first, last }
-}
-
-/**
- * 本周海报格子的纵向位置（以行为单位，可为小数）：真实时间伸到钟点行时跟着伸出去，
- * 不压进首节或末节。没有钟点行时原样返回。
- */
-export function extendIntoClockRows(span: { top: number, span: number }, item: TimeSpan, rows: PosterRow[]): { top: number, span: number } {
-  if (!rows.some(row => row.clock))
-    return span
-  const { first, last } = sectionBounds(rows)
-  const { start, end } = spanMinutes(item.start, item.end)
-  const startPosition = timeToRowPosition(formatMinutes(start), rows)
-  const endPosition = timeToRowPosition(formatMinutes(end), rows)
-  let top = span.top
-  let bottom = span.top + span.span
-  if (startPosition < first)
-    top = Math.min(top, startPosition)
-  if (endPosition > last + 1)
-    bottom = Math.max(bottom, endPosition)
-  return { top, span: bottom - top }
-}
-
 /* -------------------- 网格 -------------------- */
 
 export interface TermGridMetrics {
@@ -267,7 +175,7 @@ export interface TermGridMetrics {
   /** 文字左内边距：有色条的风格要让出色条 */
   padLeft: number
   padRight: number
-  /** 没有课的行收成的细条高度（仍写节次号或时刻） */
+  /** 没有课的行（含钟点行）收成的细条高度，仍写节次号或时刻 */
   stripRowHeight: number
   /** 午休、晚饭等较长课间的分隔带高度 */
   breakHeight: number
@@ -338,17 +246,16 @@ export interface TermCluster {
   parts: TermPart[]
 }
 
-/** 两节之间较长的课间（午休、晚饭），画成一条细分隔带 */
-export interface SectionBreak {
-  /** 位于第 after 行（下标）之后 */
-  after: number
+/**
+ * 较长的课间（午休、晚饭）画成一条细分隔带，位于第 before 行之前（与 timetable-grid 的 breakBoundaries 同义）。
+ * 位置由前后两行的时刻算出，前后补的钟点行不会让它错位。
+ */
+export interface TermBreak {
+  before: number
   label: string
-  /** 上一节下课与下一节上课的时刻 */
+  /** 上一行结束与这一行开始的时刻 */
   start: string
   end: string
-}
-
-export interface TermBreak extends SectionBreak {
   /** 相对网格顶边 */
   y: number
   height: number
@@ -373,8 +280,8 @@ export interface TermGrid {
 export interface TermGridInput {
   /** 网格宽度（不含左侧节次列） */
   width: number
-  /** 节次行，可含前后的钟点行（withClockRows） */
-  rows: PosterRow[]
+  /** weekGridRows 给出的行：节次表，外加 section 为 0 的钟点行 */
+  rows: SectionRow[]
   slots: OverviewSlot[]
   showTeacher: boolean
   /** 当前风格的格子左侧有没有色条 */
@@ -393,9 +300,6 @@ export function termWeekdays(slots: Pick<OverviewSlot, 'weekday'>[], hideWeekend
   return hideWeekend && !hasWeekendSlots(slots) ? weekdays.slice(0, 5) : weekdays
 }
 
-/** 两节之间空出这么久（分钟）才算一段休息 */
-const BREAK_MIN_MINUTES = 30
-
 function breakLabel(minutes: number): string {
   if (minutes >= 11 * 60 && minutes < 15 * 60)
     return '午休'
@@ -404,43 +308,30 @@ function breakLabel(minutes: number): string {
   return '休息'
 }
 
-/** 相邻两行之间的长课间：上一行结束到下一行开始不少于 BREAK_MIN_MINUTES */
-export function sectionBreaks(rows: SectionRow[]): SectionBreak[] {
-  const breaks: SectionBreak[] = []
-  for (let index = 0; index + 1 < rows.length; index++) {
-    const end = timeToMinutes(rows[index].end)
-    if (timeToMinutes(rows[index + 1].start) - end >= BREAK_MIN_MINUTES)
-      breaks.push({ after: index, label: breakLabel(end), start: rows[index].end, end: rows[index + 1].start })
-  }
-  return breaks
-}
-
 /**
- * 时段占据的整行区间 [top, bottom)：有节次按节次，没有节次（自定义时间）的按时刻向外取整到整行；
- * 真实时间伸到节次表之外时跟着伸进钟点行，不压进首节或末节。
+ * 时段占据的整行区间 [top, bottom)：有节次按节次（与课表页的 occurrenceRowSpan 一致）；没有节次（按时刻记录的
+ * 自定义日程）的按时刻向外取整到整行，跨过午夜的算到 24:00，起止相同的在开始处占一行。
  */
 export function slotRowRange(
   slot: Pick<OverviewSlot, 'start' | 'end' | 'start_section' | 'end_section'>,
-  rows: PosterRow[],
+  rows: SectionRow[],
 ): { top: number, bottom: number } {
   const count = Math.max(rows.length, 1)
-  const { start, end } = spanMinutes(slot.start, slot.end)
-  const timeTop = Math.floor(timeToRowPosition(formatMinutes(start), rows))
-  const timeBottom = Math.ceil(timeToRowPosition(formatMinutes(end), rows))
   const startSection = slot.start_section
   const endSection = slot.end_section
-  let top = timeTop
-  let bottom = timeBottom
+  let top: number
+  let bottom: number
   if (startSection && endSection && startSection > 0 && endSection >= startSection) {
-    const { first, last } = sectionBounds(rows)
-    const startIndex = rows.findIndex(row => !row.clock && row.section === startSection)
-    const endIndex = rows.findIndex(row => !row.clock && row.section === endSection)
+    const first = Math.max(rows.findIndex(row => row.section > 0), 0)
+    const startIndex = rows.findIndex(row => row.section === startSection)
+    const endIndex = rows.findIndex(row => row.section === endSection)
     top = startIndex >= 0 ? startIndex : first + startSection - 1
     bottom = endIndex >= 0 ? endIndex + 1 : first + endSection
-    if (timeTop < first)
-      top = Math.min(top, timeTop)
-    if (timeBottom > last + 1)
-      bottom = Math.max(bottom, timeBottom)
+  }
+  else {
+    const minutes = spanMinutes(slot.start, slot.end)
+    top = Math.floor(minutes ? minutesToRowPosition(minutes.start, rows) : timeToRowPosition(slot.start, rows))
+    bottom = minutes ? Math.ceil(minutesToRowPosition(minutes.end, rows)) : top + 1
   }
   top = Math.min(Math.max(top, 0), count - 1)
   bottom = Math.min(Math.max(bottom, top + 1), count)
@@ -485,13 +376,9 @@ function groupOverlapping(items: PlacedSlot[]): PlacedSlot[][] {
   return groups
 }
 
-/** 组内起止不一致时每块补上自己的节次（没有节次写时刻，23:59 写成 24:00），否则看不出谁先谁后 */
+/** 组内起止不一致时每块补上自己的节次（没有节次写时刻，23:59 与跨过午夜的写成 24:00），否则看不出谁先谁后 */
 function slotTimeLabel(slot: OverviewSlot): string {
-  const sections = describeSections(slot.start_section, slot.end_section)
-  if (sections)
-    return sections
-  const { start, end } = spanMinutes(slot.start, slot.end)
-  return `${formatMinutes(start)}–${formatMinutes(end)}`
+  return describeSections(slot.start_section, slot.end_section) || `${displayClock(slot.start)}–${displayEndClock(slot)}`
 }
 
 interface PartContext {
@@ -580,46 +467,61 @@ function clusterNeed(cluster: TermCluster, metrics: TermGridMetrics): number {
   return content + metrics.stackGap * (cluster.parts.length - 1) + metrics.inset * 2
 }
 
-/** 行区间 [top, bottom) 的总高度，含夹在其中的分隔带 */
-function spanHeight(heights: number[], gapAfter: number[], top: number, bottom: number): number {
+/** 行区间 [top, bottom) 的总高度，含夹在其中的分隔带（gapBefore[k] 是第 k 行之前的分隔带高度） */
+function spanHeight(heights: number[], gapBefore: number[], top: number, bottom: number): number {
   let total = 0
   for (let row = top; row < bottom; row++) {
     total += heights[row]
-    if (row < bottom - 1)
-      total += gapAfter[row]
+    if (row > top)
+      total += gapBefore[row]
   }
   return total
+}
+
+interface ClusterNeed {
+  cluster: TermCluster
+  need: number
+}
+
+/** 逐行收回所有覆盖这一行的组都用不上的高度；whole 为 true 时只收整像素，行高保持整数 */
+function trimSlack(heights: number[], needs: ClusterNeed[], gapBefore: number[], metrics: TermGridMetrics, whole = false) {
+  for (let row = 0; row < heights.length; row++) {
+    let surplus = heights[row] - metrics.stripRowHeight
+    for (const { cluster, need } of needs) {
+      if (cluster.top <= row && row < cluster.bottom)
+        surplus = Math.min(surplus, spanHeight(heights, gapBefore, cluster.top, cluster.bottom) - need)
+    }
+    if (whole)
+      surplus = Math.floor(surplus + 1e-6)
+    if (surplus > 0)
+      heights[row] -= surplus
+  }
 }
 
 /**
  * 行高按内容定，整张图尽量矮：
  * 1. 每行先是细条；跨行少的组先定，放不下时把缺的高度平均加到它占的各行；
- * 2. 平分会让同一行里别的组多出空白：逐行收回所有覆盖它的组都用不上的高度。
- * 没有课的行始终是细条。
+ * 2. 平分会让同一行里别的组多出空白：逐行收回所有覆盖它的组都用不上的高度；
+ * 3. 行高向上取整后，跨多行的组会攒下几像素空白，再按整像素收一遍。
+ * 没有课的行（包括钟点行）始终是细条。
  */
-function fitRowHeights(clusters: TermCluster[], rowCount: number, gapAfter: number[], metrics: TermGridMetrics): number[] {
+function fitRowHeights(clusters: TermCluster[], rowCount: number, gapBefore: number[], metrics: TermGridMetrics): number[] {
   const heights = Array.from({ length: rowCount }, () => metrics.stripRowHeight)
-  const needs = clusters.map(cluster => ({ cluster, need: clusterNeed(cluster, metrics) }))
+  const needs: ClusterNeed[] = clusters.map(cluster => ({ cluster, need: clusterNeed(cluster, metrics) }))
   const ordered = [...needs].sort((a, b) =>
     (a.cluster.bottom - a.cluster.top) - (b.cluster.bottom - b.cluster.top) || b.need - a.need)
   for (const { cluster, need } of ordered) {
-    const have = spanHeight(heights, gapAfter, cluster.top, cluster.bottom)
+    const have = spanHeight(heights, gapBefore, cluster.top, cluster.bottom)
     if (have >= need)
       continue
     const extra = (need - have) / (cluster.bottom - cluster.top)
     for (let row = cluster.top; row < cluster.bottom; row++)
       heights[row] += extra
   }
-  for (let row = 0; row < rowCount; row++) {
-    let surplus = heights[row] - metrics.stripRowHeight
-    for (const { cluster, need } of needs) {
-      if (cluster.top <= row && row < cluster.bottom)
-        surplus = Math.min(surplus, spanHeight(heights, gapAfter, cluster.top, cluster.bottom) - need)
-    }
-    if (surplus > 0)
-      heights[row] -= surplus
-  }
-  return heights.map(height => Math.ceil(height - 1e-6))
+  trimSlack(heights, needs, gapBefore, metrics)
+  const rounded = heights.map(height => Math.ceil(height - 1e-6))
+  trimSlack(rounded, needs, gapBefore, metrics, true)
+  return rounded
 }
 
 /**
@@ -669,20 +571,25 @@ export function layoutTermGrid(input: TermGridInput, measure: MeasureText): Term
     }
   })
 
-  const sectionGaps = sectionBreaks(input.rows)
-  const gapAfter = Array.from({ length: rowCount }, () => 0)
-  for (const gap of sectionGaps)
-    gapAfter[gap.after] = metrics.breakHeight
-  const rowHeights = fitRowHeights(clusters, rowCount, gapAfter, metrics)
+  // 分隔带与课表页同一规则（breakBoundaries：前后两行的时刻相差不少于 30 分钟），下标 k 表示第 k 行之前
+  const boundaries = breakBoundaries(input.rows)
+  const gapBefore = Array.from({ length: rowCount }, () => 0)
+  for (const index of boundaries)
+    gapBefore[index] = metrics.breakHeight
+  const rowHeights = fitRowHeights(clusters, rowCount, gapBefore, metrics)
   const rowTops: number[] = []
   let height = 0
   rowHeights.forEach((rowHeight, row) => {
+    height += gapBefore[row]
     rowTops.push(height)
-    height += rowHeight + gapAfter[row]
+    height += rowHeight
   })
-  const breaks = sectionGaps.map(gap => ({
-    ...gap,
-    y: rowTops[gap.after] + rowHeights[gap.after],
+  const breaks: TermBreak[] = boundaries.map(index => ({
+    before: index,
+    label: breakLabel(timeToMinutes(input.rows[index - 1].end)),
+    start: input.rows[index - 1].end,
+    end: input.rows[index].start,
+    y: rowTops[index] - metrics.breakHeight,
     height: metrics.breakHeight,
   }))
   for (const cluster of clusters)
@@ -711,7 +618,7 @@ export function describeExam(exam: OverviewExam): string {
   }
   if (exam.start) {
     // 结束于 23:59 的与网格一样写成 24:00
-    const end = exam.end ? formatMinutes(spanMinutes(exam.start, exam.end).end) : ''
+    const end = exam.end ? displayEndClock({ start: exam.start, end: exam.end }) : ''
     parts.push(`${dayPeriod(exam.start)} ${exam.start}${end ? `–${end}` : ''}`)
   }
   if (!parts.length)

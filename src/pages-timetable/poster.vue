@@ -2,8 +2,9 @@
 import type { ShareAssets } from '@/api/types/share'
 import type { Occurrence, OverviewOut, WeekView } from '@/api/types/timetable'
 import type { UvToastInstance } from '@/hooks/useApiException'
-import type { ExamListLayout, MeasureText, PosterRow, TermGrid, TermPart } from '@/utils/poster-overview'
+import type { ExamListLayout, MeasureText, TermGrid, TermPart } from '@/utils/poster-overview'
 import type { PosterBadgeKind, PosterFill, PosterMode, PosterTheme, PosterThemeKey } from '@/utils/poster-themes'
+import type { SectionRow } from '@/utils/timetable'
 import { onLoad, onShareAppMessage, onUnload } from '@dcloudio/uni-app'
 import { computed, getCurrentInstance, nextTick, ref, watch } from 'vue'
 import { getShareAssets } from '@/api/share'
@@ -14,7 +15,7 @@ import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { debounce } from '@/utils/debounce'
 import { confirmModal } from '@/utils/dialog'
-import { extendIntoClockRows, hasWeekendSlots, layoutExamList, layoutTermGrid, withClockRows } from '@/utils/poster-overview'
+import { hasWeekendSlots, layoutExamList, layoutTermGrid } from '@/utils/poster-overview'
 import {
   blockColorFor,
   DEFAULT_POSTER_MODE,
@@ -34,14 +35,16 @@ import {
   calendarLabelColor,
   chineseDate,
   dayInfo,
+  displayClock,
   KIND_BADGES,
   occurrenceRowSpan,
   readLocalHiddenIds,
-  sectionRows,
+  readWeekendMode,
   shortDate,
   suspendsClasses,
   todayIso,
   WEEKDAY_LABELS,
+  weekGridRows,
   weekSuspendedReason,
 } from '@/utils/timetable'
 
@@ -206,7 +209,7 @@ const withQr = ref(false)
 const showName = ref(false)
 /** 整学期海报是否写上教师；只作用于本页，默认不写 */
 const showTeacher = ref(false)
-/** 整学期海报隐藏周六、周日两列；只在本学期周末没有课时可选，默认不隐藏 */
+/** 整学期海报隐藏周六、周日两列；只在本学期周末没有课时可选，默认跟课表页的「隐藏周末」设置 */
 const hideWeekend = ref(false)
 /** 转发卡片用的 5:4 缩略图（海报顶部），导出失败就用微信默认截图 */
 const shareImagePath = ref('')
@@ -256,9 +259,9 @@ const visibleOccurrences = computed(() => {
   const localHidden = new Set(readLocalHiddenIds(userStore.userInfo.username))
   return (view.value?.occurrences ?? []).filter(item => !item.hidden && !localHidden.has(item.id))
 })
-/** 节次行；有日程早于首节上课或晚于末节下课时，前后补上刚好盖住它们的钟点行 */
-const rows = computed(() => withClockRows(
-  sectionRows(activeTerm.value),
+/** 网格行与课表页同一套时间轴：节次表，日程伸出节次表时前后补整点的钟点行（section 为 0） */
+const rows = computed(() => weekGridRows(
+  activeTerm.value,
   effectiveMode.value === 'term' ? overview.value?.slots ?? [] : visibleOccurrences.value,
 ))
 
@@ -337,7 +340,7 @@ function buildLayout(width: number, rowCount: number, hasLegend: boolean, hasTil
 }
 
 /** 整学期海报：页眉、卡片边距与页脚按宽度等比放大，网格行高由内容决定 */
-function buildTermLayout(data: OverviewOut, sectionList: PosterRow[], measure: MeasureText, options: TermLayoutOptions): TermPosterLayout {
+function buildTermLayout(data: OverviewOut, sectionList: SectionRow[], measure: MeasureText, options: TermLayoutOptions): TermPosterLayout {
   const { width } = options
   const unit = width / TERM_CHROME_BASE
   const cardX = PAGE_PAD * unit
@@ -424,7 +427,7 @@ function scaleLayout(layout: PosterLayout, factor: number): PosterLayout {
  */
 function fitTermLayout(
   data: OverviewOut,
-  sectionList: PosterRow[],
+  sectionList: SectionRow[],
   measure: MeasureText,
   options: Omit<TermLayoutOptions, 'width'>,
 ): { layout: TermPosterLayout, scale: number } {
@@ -639,7 +642,7 @@ function drawPoster(
   theme: PosterTheme,
   layout: PosterLayout,
   header: HeaderText,
-  sectionList: PosterRow[],
+  sectionList: SectionRow[],
   legend: LegendItem[],
   tiles: QrTile[],
 ) {
@@ -800,7 +803,7 @@ function drawDayHeader(ctx: CanvasRenderingContext2D, data: WeekView, theme: Pos
 }
 
 /** 节次列与网格线 */
-function drawGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: PosterLayout, sectionList: PosterRow[]) {
+function drawGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: PosterLayout, sectionList: SectionRow[]) {
   const { innerLeft, innerWidth, gridTop, gridLeft, gridHeight, colWidth } = layout
   const labelX = innerLeft + LEFT_COL / 2
   ctx.strokeStyle = theme.grid.line
@@ -810,14 +813,14 @@ function drawGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: Pos
   sectionList.forEach((row, index) => {
     const y = gridTop + index * ROW_H
     strokeLine(ctx, innerLeft, y, innerLeft + innerWidth, y)
-    if (row.clock) {
+    if (row.section === 0) {
       // 节次表之外的钟点行：写起止时刻
       ctx.fillStyle = theme.grid.section
       setFont(ctx, 8, 'bold')
-      ctx.fillText(row.start, labelX, y + 13)
+      ctx.fillText(displayClock(row.start), labelX, y + 13)
       ctx.fillStyle = theme.text.muted
       setFont(ctx, 7.5)
-      ctx.fillText(row.end, labelX, y + 25)
+      ctx.fillText(displayClock(row.end), labelX, y + 25)
       return
     }
     ctx.fillStyle = theme.grid.section
@@ -836,7 +839,7 @@ function drawGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: Pos
 }
 
 /** 日程格子；没有日程时在网格中央写一行空状态 */
-function drawBlocks(ctx: CanvasRenderingContext2D, data: WeekView, theme: PosterTheme, layout: PosterLayout, sectionList: PosterRow[]) {
+function drawBlocks(ctx: CanvasRenderingContext2D, data: WeekView, theme: PosterTheme, layout: PosterLayout, sectionList: SectionRow[]) {
   const visible = visibleOccurrences.value
   if (!visible.length) {
     const reason = weekSuspendedReason(data)
@@ -870,11 +873,10 @@ function drawBlock(
   slot: { index: number, count: number },
   theme: PosterTheme,
   layout: PosterLayout,
-  sectionList: PosterRow[],
+  sectionList: SectionRow[],
 ) {
   const { gridLeft, gridTop, colWidth } = layout
-  // 真实时间伸出节次表时跟着伸进钟点行，不压进首节或末节
-  const { top, span } = extendIntoClockRows(occurrenceRowSpan(occurrence, sectionList), occurrence, sectionList)
+  const { top, span } = occurrenceRowSpan(occurrence, sectionList)
   const color = blockColorFor(theme, occurrence)
   const column = Math.min(Math.max(occurrence.weekday, 1), 7) - 1
   const slotWidth = colWidth / slot.count
@@ -1044,7 +1046,7 @@ function drawTermPoster(
   theme: PosterTheme,
   layout: TermPosterLayout,
   header: HeaderText,
-  sectionList: PosterRow[],
+  sectionList: SectionRow[],
   legend: LegendItem[],
   tiles: QrTile[],
 ) {
@@ -1084,20 +1086,21 @@ function drawTermDayHeader(ctx: CanvasRenderingContext2D, theme: PosterTheme, la
  * 节次标签随行高换写法：够高写节次号与起止时间，矮一些写节次号与上课时间，收成细条时一行写完。
  * 节次表之外的钟点行把节次号换成起始时刻、上课时间换成结束时刻
  */
-function drawSectionLabel(ctx: CanvasRenderingContext2D, theme: PosterTheme, row: PosterRow, left: number, top: number, height: number) {
+function drawSectionLabel(ctx: CanvasRenderingContext2D, theme: PosterTheme, row: SectionRow, left: number, top: number, height: number) {
   const centre = left + TERM_LEFT_COL / 2
-  const head = row.clock ? row.start : String(row.section)
-  const tail = row.clock ? row.end : row.start
+  const clock = row.section === 0
+  const head = clock ? displayClock(row.start) : String(row.section)
+  const tail = clock ? displayClock(row.end) : row.start
   ctx.textBaseline = 'middle'
   if (height >= 46) {
     ctx.textAlign = 'center'
     ctx.fillStyle = theme.grid.section
-    setFont(ctx, row.clock ? 12 : 14, 'bold')
+    setFont(ctx, clock ? 12 : 14, 'bold')
     ctx.fillText(head, centre, top + 15)
     ctx.fillStyle = theme.text.muted
     setFont(ctx, 10)
     ctx.fillText(tail, centre, top + 30)
-    if (!row.clock)
+    if (!clock)
       ctx.fillText(row.end, centre, top + 42)
     return
   }
@@ -1105,7 +1108,7 @@ function drawSectionLabel(ctx: CanvasRenderingContext2D, theme: PosterTheme, row
   if (height >= 28) {
     ctx.textAlign = 'center'
     ctx.fillStyle = theme.grid.section
-    setFont(ctx, row.clock ? 11 : 13, 'bold')
+    setFont(ctx, clock ? 11 : 13, 'bold')
     ctx.fillText(head, centre, middle - 6)
     ctx.fillStyle = theme.text.muted
     setFont(ctx, 9)
@@ -1115,7 +1118,7 @@ function drawSectionLabel(ctx: CanvasRenderingContext2D, theme: PosterTheme, row
   // 细条：左边写节次号（钟点行写起始时刻），右边写时间；放不下时缩小右边字号，再放不下只写左边
   ctx.textAlign = 'left'
   ctx.fillStyle = theme.grid.section
-  setFont(ctx, row.clock ? 9.5 : 11, 'bold')
+  setFont(ctx, clock ? 9.5 : 11, 'bold')
   const room = TERM_LEFT_COL - 8 - ctx.measureText(head).width - 3
   ctx.fillText(head, left + 4, middle)
   setFont(ctx, 8.5)
@@ -1130,7 +1133,7 @@ function drawSectionLabel(ctx: CanvasRenderingContext2D, theme: PosterTheme, row
 }
 
 /** 网格线、节次列与午休 / 晚饭分隔带；行高各不相同，没课的节次收成细条 */
-function drawTermGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: TermPosterLayout, sectionList: PosterRow[]) {
+function drawTermGrid(ctx: CanvasRenderingContext2D, theme: PosterTheme, layout: TermPosterLayout, sectionList: SectionRow[]) {
   const { innerLeft, innerWidth, gridTop, gridLeft, gridHeight, grid } = layout
   const right = innerLeft + innerWidth
   ctx.strokeStyle = theme.grid.line
@@ -1403,7 +1406,10 @@ async function ensureModeData(target: PosterMode) {
     if (overview.value)
       return
     try {
-      overview.value = await getOverview({ term: query.value.term })
+      const data = await getOverview({ term: query.value.term })
+      // 周末没有课时「隐藏周末」默认跟课表页的设置；周末有课始终画七列
+      hideWeekend.value = !hasWeekendSlots(data.slots) && readWeekendMode() === 'hide'
+      overview.value = data
       return
     }
     catch (error) {
