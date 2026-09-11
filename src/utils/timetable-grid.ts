@@ -80,9 +80,54 @@ export function breakBoundaries(rows: SectionRow[]): number[] {
   return boundaries
 }
 
+/** Clock rows before the section table (早间) or after it (晚间) */
+export type ClockZone = 'early' | 'late'
+
+export interface ZoneBoundary {
+  /** Row index k: the zone band sits between row k − 1 and row k */
+  index: number
+  zone: ClockZone
+}
+
+/** Labels written on the zone bands, in the section axis only */
+export const ZONE_LABELS: Record<ClockZone, string> = {
+  early: '早间',
+  late: '晚间',
+}
+
+/** Height (rpx) of a zone label; it overhangs the BREAK_HEIGHT band evenly above and below */
+export const ZONE_LABEL_HEIGHT = 20
+
+/**
+ * Where the clock rows of weekGridRows() (`section: 0`) meet the section table: an early boundary at the
+ * first section when clock rows come before it, a late boundary at the first clock row after the last
+ * section. A week without clock rows has none.
+ */
+export function zoneBoundaries(rows: SectionRow[]): ZoneBoundary[] {
+  const boundaries: ZoneBoundary[] = []
+  for (let index = 1; index < rows.length; index++) {
+    const sectionBefore = rows[index - 1].section > 0
+    const sectionAfter = rows[index].section > 0
+    if (!sectionBefore && sectionAfter)
+      boundaries.push({ index, zone: 'early' })
+    else if (sectionBefore && !sectionAfter)
+      boundaries.push({ index, zone: 'late' })
+  }
+  return boundaries
+}
+
+/**
+ * Every row index with a band above it, ascending: the lunch / dinner breaks and the 早间 / 晚间 zone edges.
+ * Bands add height, not time, so rowOffset() with these keeps blocks at their real times.
+ */
+export function bandBoundaries(rows: SectionRow[]): number[] {
+  const indexes = [...breakBoundaries(rows), ...zoneBoundaries(rows).map(boundary => boundary.index)]
+  return Array.from(new Set(indexes)).sort((a, b) => a - b)
+}
+
 export interface GridMetrics {
   rowHeight: number
-  /** From breakBoundaries */
+  /** From bandBoundaries (breakBoundaries when there are no clock rows) */
   breaks: number[]
 }
 
