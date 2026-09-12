@@ -2,10 +2,18 @@
 import { onHide, onLaunch, onShow } from '@dcloudio/uni-app'
 import { BIND_PAGE } from '@/router/config'
 import { navigateToInterceptor } from '@/router/interceptor'
-import { useTokenStore } from './store'
+import { useRolloutStore, useTokenStore } from './store'
+import updateManager from './utils/updateManager.wx'
+
+// 在自动登录之前创建，灰度状态才能跟上登录、切换账号和退出登录
+const rolloutStore = useRolloutStore()
 
 onLaunch((options) => {
   console.log('App.vue onLaunch', options)
+  // #ifdef MP-WEIXIN
+  // 有新版本时提示重启
+  updateManager()
+  // #endif
   // 尝试自动登录
   // #ifdef MP-WEIXIN
   const tokenStore = useTokenStore()
@@ -32,6 +40,8 @@ onShow((options) => {
   else {
     navigateToInterceptor.invoke({ url: '/' })
   }
+  // 回到前台时按节流刷新灰度状态
+  rolloutStore.refreshInBackground()
 })
 onHide(() => {
   console.log('App Hide')

@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { storeToRefs } from 'pinia'
+import { useRolloutStore } from '@/store/rollout'
 import { useUserStore } from '@/store/user'
 import { openWebview } from '@/utils/webview'
 
@@ -17,6 +18,8 @@ interface AppItem {
   url?: string
   /** Legacy web path opened through the authenticated webview. */
   uri?: string
+  /** Feature key required to show this entry. */
+  feature?: string
 }
 
 interface AppGroup {
@@ -82,9 +85,15 @@ const APP_LIST_ORG: AppGroup[] = [
 ]
 
 const userStore = useUserStore()
+const rolloutStore = useRolloutStore()
 const { userInfo } = storeToRefs(userStore)
 
-const appGroups = computed(() => (userInfo.value.is_org ? APP_LIST_ORG : APP_LIST_PERSON))
+const appGroups = computed(() => {
+  const groups = userInfo.value.is_org ? APP_LIST_ORG : APP_LIST_PERSON
+  return groups
+    .map(group => ({ ...group, apps: group.apps.filter(app => !app.feature || rolloutStore.isEnabled(app.feature)) }))
+    .filter(group => group.apps.length > 0)
+})
 
 async function handleAppClick(app: AppItem) {
   if (app.uri) {
