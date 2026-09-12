@@ -66,8 +66,16 @@ export interface Feedback {
   publisher_public?: boolean
   /** 可选：图片等附件 */
   images?: string[]
+  /** 灰度功能标识；不是体验反馈时为空字符串 */
+  feature_key?: string
   [key: string]: unknown
 }
+
+/**
+ * 附在反馈上的客户端环境（如小程序版本），不能包含个人信息。
+ * 后端限制：最多 8 项，键不超过 32 个字符，值不超过 128 个字符。
+ */
+export type FeedbackClientInfo = Record<string, string>
 
 /** 创建反馈请求体（草稿或直接提交） */
 export interface FeedbackCreate {
@@ -89,6 +97,10 @@ export interface FeedbackCreate {
   url?: string
   /** 可选：图片等 */
   images?: string[]
+  /** 灰度功能标识（可选）；填写时 type、otype、org 必须是后端配置的体验反馈目标 */
+  feature_key?: string
+  /** 客户端环境（可选），见 FeedbackClientInfo */
+  client_info?: FeedbackClientInfo
   [key: string]: unknown
 }
 

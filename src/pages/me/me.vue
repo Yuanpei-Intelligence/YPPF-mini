@@ -8,6 +8,7 @@ import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
 import { BIND_PAGE, LOGIN_PAGE } from '@/router/config'
 import { useUserStore } from '@/store'
+import { useRolloutStore } from '@/store/rollout'
 import { useTokenStore } from '@/store/token'
 import { toBackendURL } from '@/utils'
 import { openWebview } from '@/utils/webview'
@@ -22,6 +23,7 @@ definePage({
 
 const userStore = useUserStore()
 const tokenStore = useTokenStore()
+const rolloutStore = useRolloutStore()
 const { userInfo } = storeToRefs(userStore)
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
@@ -129,8 +131,18 @@ usePageRefresh(
   },
 )
 
+interface MenuItem {
+  title: string
+  icon: string
+  onClick: () => void
+  /** 灰度功能标识：没有对当前账号开放时不显示 */
+  feature?: string
+  /** 只对个人账号显示 */
+  personOnly?: boolean
+}
+
 // 菜单项
-const menuItems = [
+const menuItems: MenuItem[] = [
   { title: '我的预约', icon: 'i-carbon-calendar', onClick: () => uni.navigateTo({ url: '/pages/me/my-appointments' }) },
   { title: '信用分记录', icon: 'i-carbon-star', onClick: () => uni.navigateTo({ url: '/pages/me/my-violations' }) },
   // { title: '设置', icon: 'i-carbon-settings', onClick: handleNothing },
@@ -138,9 +150,15 @@ const menuItems = [
   // { title: '关于我们', icon: 'i-carbon-information', onClick: handleNothing },
   { title: '切换账户', icon: 'i-carbon-collaborate', onClick: () => uni.navigateTo({ url: '/pages/me/my-accounts' }) },
   { title: '编辑个人资料', icon: 'i-carbon-user-profile', onClick: () => openWebview({ uri: '/userAccountSetting' }) },
+  { title: '体验通道', icon: 'i-carbon-rocket', personOnly: true, onClick: () => uni.navigateTo({ url: '/pages/me/preview' }) },
   // Un-comment to debug
   // { title: '调试信息', icon: 'i-carbon-debug', onClick: () => uni.navigateTo({ url: '/pages/me/debug' }) },
 ]
+
+const visibleMenuItems = computed(() => menuItems.filter(item =>
+  (!item.personOnly || userInfo.value.is_person)
+  && (!item.feature || rolloutStore.isEnabled(item.feature)),
+))
 
 function handleProfile() {
   /* TODO: 把这个改成原生的 */
@@ -226,7 +244,7 @@ function handleProfile() {
           <view class="i-carbon-chevron-right text-sm text-gray-300" />
         </view>
         <view
-          v-for="(item, index) in menuItems"
+          v-for="(item, index) in visibleMenuItems"
           :key="index"
           class="flex items-center justify-between border-b border-gray-50 p-4 last:border-none active:bg-gray-50"
           @click="item.onClick"

@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { storeToRefs } from 'pinia'
+import { useRolloutStore } from '@/store/rollout'
 import { useUserStore } from '@/store/user'
 import { openWebview } from '@/utils/webview'
 
@@ -12,9 +13,10 @@ definePage({
 })
 
 const userStore = useUserStore()
+const rolloutStore = useRolloutStore()
 const { userInfo } = storeToRefs(userStore)
 
-const APP_LIST_PERSON = [
+const APP_LIST_PERSON: AppGroup[] = [
   {
     name: '实用工具',
     apps: [
@@ -44,7 +46,7 @@ const APP_LIST_PERSON = [
   },
 ]
 
-const APP_LIST_ORG = [
+const APP_LIST_ORG: AppGroup[] = [
   {
     name: '实用工具',
     apps: [
@@ -65,7 +67,11 @@ const APP_LIST_ORG = [
 ]
 
 const appGroups = computed(() => {
-  return userInfo.value.is_org ? APP_LIST_ORG : APP_LIST_PERSON
+  const groups = userInfo.value.is_org ? APP_LIST_ORG : APP_LIST_PERSON
+  // 按灰度开关隐藏入口；分组里没有可见入口时整组不显示
+  return groups
+    .map(group => ({ ...group, apps: group.apps.filter(app => !app.feature || rolloutStore.isEnabled(app.feature)) }))
+    .filter(group => group.apps.length > 0)
 })
 
 interface AppItem {
@@ -74,6 +80,13 @@ interface AppItem {
   color: string
   url?: string
   uri?: string
+  /** 灰度功能标识：没有对当前账号开放时不显示 */
+  feature?: string
+}
+
+interface AppGroup {
+  name: string
+  apps: AppItem[]
 }
 
 async function handleAppClick(app: AppItem) {
