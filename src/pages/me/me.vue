@@ -8,6 +8,7 @@ import { useConfirm } from '@/hooks/useConfirm'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
 import { BIND_PAGE, LOGIN_PAGE } from '@/router/config'
 import { useUserStore } from '@/store'
+import { useRolloutStore } from '@/store/rollout'
 import { useTokenStore } from '@/store/token'
 import { toBackendURL } from '@/utils'
 import { openWebview } from '@/utils/webview'
@@ -23,10 +24,13 @@ interface MenuItem {
   title: string
   icon: string
   onClick: () => void
+  feature?: string
+  personOnly?: boolean
 }
 
 const userStore = useUserStore()
 const tokenStore = useTokenStore()
+const rolloutStore = useRolloutStore()
 const { userInfo } = storeToRefs(userStore)
 const toastRef = ref<UvToastInstance | null>(null)
 const { handleApiException, showMessage } = useApiException(toastRef)
@@ -195,9 +199,18 @@ const primaryMenu: MenuItem[] = [
 const accountMenu: MenuItem[] = [
   { key: 'accounts', title: '切换账户', icon: 'i-carbon-user-multiple', onClick: () => uni.navigateTo({ url: '/pages/me/my-accounts' }) },
   { key: 'profile', title: '编辑个人资料', icon: 'i-carbon-user-profile', onClick: () => openWebview({ uri: '/userAccountSetting' }) },
+  { key: 'preview', title: '体验通道', icon: 'i-carbon-rocket', personOnly: true, onClick: () => uni.navigateTo({ url: '/pages/me/preview' }) },
   // Un-comment to debug
   // { key: 'debug', title: '调试信息', icon: 'i-carbon-debug', onClick: () => uni.navigateTo({ url: '/pages/me/debug' }) },
 ]
+
+function isMenuVisible(item: MenuItem): boolean {
+  return (!item.personOnly || userInfo.value.is_person)
+    && (!item.feature || rolloutStore.isEnabled(item.feature))
+}
+
+const visiblePrimaryMenu = computed(() => primaryMenu.filter(isMenuVisible))
+const visibleAccountMenu = computed(() => accountMenu.filter(isMenuVisible))
 
 function handleProfile() {
   /* TODO: 把这个改成原生的 */
@@ -244,7 +257,7 @@ function handleHeaderClick() {
 
     <!-- 功能入口 -->
     <view class="mt-3 bg-card">
-      <template v-for="(item, index) in primaryMenu" :key="item.key">
+      <template v-for="(item, index) in visiblePrimaryMenu" :key="item.key">
         <view v-if="index > 0" class="yp-divider" />
         <view class="yp-list-item" @click="item.onClick">
           <view :class="item.icon" class="text-xl text-fg-2" />
@@ -262,7 +275,7 @@ function handleHeaderClick() {
 
     <!-- 账户 -->
     <view class="mt-3 bg-card">
-      <template v-for="(item, index) in accountMenu" :key="item.key">
+      <template v-for="(item, index) in visibleAccountMenu" :key="item.key">
         <view v-if="index > 0" class="yp-divider" />
         <view class="yp-list-item" @click="item.onClick">
           <view :class="item.icon" class="text-xl text-fg-2" />
