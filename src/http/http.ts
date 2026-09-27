@@ -5,7 +5,7 @@ import { BIND_PAGE, LOGIN_PAGE_LIST } from '@/router/config'
 import { useTokenStore } from '@/store/token'
 import { isDoubleTokenMode } from '@/utils'
 import { toLoginPage } from '@/utils/toLoginPage'
-import { createNetworkError, createResponseError } from './errors'
+import { createNetworkError, createResponseError, toRequestError } from './errors'
 import { ResultEnum } from './tools/enum'
 
 /** 判断错误是否由采用新异常契约的页面自行展示。 */
@@ -13,8 +13,12 @@ function usesManualErrorPresentation(options: CustomRequestOptions): boolean {
   return options.errorPresentation === 'manual' || options.hideErrorToast === true
 }
 
+/** 内部标记：这次请求是 401 重登后的重试，不再进入重登流程 */
+type RetryAwareOptions = CustomRequestOptions & { __retried401?: boolean }
+
 // 刷新 token 状态管理
 let refreshing = false // 防止重复刷新 token 标识
+let bindNavigating = false // 正在跳转绑定页，避免并发 401 重复跳转
 let taskQueue: (() => void)[] = [] // 刷新 token 请求队列
 const NO_RETRY_PATHS = [
   '/pages/login/index',
@@ -35,7 +39,8 @@ export function http<T>(options: CustomRequestOptions) {
       // #endif
       // 响应成功
       success: async (res) => {
-        const responseData = res.data as IResponse<T>
+        // 204 等无响应体时 res.data 可能为空；兜底成空对象，避免解构抛错导致 Promise 永不结束
+        const responseData = (res.data ?? {}) as IResponse<T>
         const { code } = responseData
 
         // 检查是否是401 Authentication Error
@@ -43,6 +48,15 @@ export function http<T>(options: CustomRequestOptions) {
         const requestPath = options.url || ''
 
         if (isTokenExpired && !NO_RETRY_PATHS.includes(requestPath)) {
+          // 重登成功后只重试一次：仍然 401 说明不是 token 过期（账号被停用、时钟偏差、后端异常），
+          // 不能无限递归重试
+          if ((options as RetryAwareOptions).__retried401) {
+            return reject(createResponseError(401, {
+              code: 'auth.unauthorized',
+              message: '登录状态无效，请重新登录。',
+              errors: {},
+            }))
+          }
           const tokenStore = useTokenStore()
           if (!isDoubleTokenMode) {
             // #ifdef MP-WEIXIN
@@ -52,21 +66,31 @@ export function http<T>(options: CustomRequestOptions) {
               loginResult = await tokenStore.wxLogin()
             }
             catch (error) {
-              return reject(error)
+              // wx.login / 换 openid 失败也要以 RequestError 抛出，保持“所有失败都是 RequestError”的约定
+              return reject(toRequestError(error))
             }
             // 未绑定账号，跳转到绑定页面，防止死锁
             if (loginResult.status === 'unbound') {
-              uni.navigateTo({
-                url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(loginResult.signed_openid)}`,
-              })
+              // 多个请求同时 401 时只跳一次，避免把绑定页叠开好几层
+              if (!bindNavigating) {
+                bindNavigating = true
+                uni.navigateTo({
+                  url: `${BIND_PAGE}?signed_openid=${encodeURIComponent(loginResult.signed_openid)}`,
+                  complete: () => {
+                    setTimeout(() => {
+                      bindNavigating = false
+                    }, 1500)
+                  },
+                })
+              }
               return reject(createResponseError(401, {
                 code: 'auth.binding_required',
                 message: '请先绑定微信账号。',
                 errors: {},
               }))
             }
-            // 绑定的账号，说明登录了，重新尝试发送请求
-            return resolve(http<T>(options))
+            // 绑定的账号，说明登录了，重新尝试发送请求（只重试这一次）
+            return resolve(http<T>({ ...options, __retried401: true } as RetryAwareOptions))
             // #endif
             // 其他平台走正常流程
             tokenStore.logout()
