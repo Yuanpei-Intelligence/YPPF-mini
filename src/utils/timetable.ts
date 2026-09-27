@@ -7,6 +7,7 @@ import type {
   EntryCategory,
   EntryExam,
   EntryOverride,
+  EntryPatch,
   EntryRole,
   LessonBlock,
   Occurrence,
@@ -53,7 +54,19 @@ export const STATUS_LABELS: Record<string, string> = {
   canceled: '已取消',
   checked_in: '已签到',
   applied: '已报名',
+  suspended: '停课',
 }
+
+/** 列表里状态文字的颜色：停课置灰但不划线，划线只留给已取消 */
+export const STATUS_CLASSES: Record<string, string> = {
+  canceled: 'text-error',
+  checked_in: 'text-success',
+  applied: 'text-primary',
+  suspended: 'text-fg-3',
+}
+
+/** 调休搬来的课在列表里的标注 */
+export const SWAP_NOTE = '调休'
 
 export const PARITY_LABELS = ['每周', '单周', '双周'] as const
 
@@ -124,6 +137,7 @@ export function colorForOccurrence(occurrence: Occurrence): PaletteColor {
 }
 
 export interface SectionRow {
+  /** 1-based section number; 0 for a clock row added outside the section table (weekGridRows) */
   section: number
   start: string
   end: string
@@ -165,10 +179,16 @@ export function timeToMinutes(time: string): number {
 }
 
 /**
- * 把时刻换算成以“行”为单位的纵向位置：落在某节内按比例插值，落在课间则贴到下一节起点
+ * 把时刻换算成以“行”为单位的纵向位置：落在某节内按比例插值，落在课间则贴到下一节起点。
+ * `time` is an ISO datetime or a bare `HH:MM`; only its clock is used. Times beyond the rows clamp to their
+ * edges, so a week with early or late times needs weekGridRows().
  */
 export function timeToRowPosition(time: string, rows: SectionRow[]): number {
-  const minutes = timeToMinutes(time)
+  return minutesToRowPosition(timeToMinutes(clockPart(time)), rows)
+}
+
+/** timeToRowPosition for minutes since midnight (1440 = 24:00), e.g. from spanMinutes() */
+export function minutesToRowPosition(minutes: number, rows: SectionRow[]): number {
   if (!rows.length)
     return 0
   if (minutes <= timeToMinutes(rows[0].start))
@@ -196,6 +216,111 @@ export function clockOf(datetime: string): string {
   return datetime.length >= 16 ? datetime.slice(11, 16) : datetime
 }
 
+/** Minutes in a day; an end at 24:00 is DAY_MINUTES */
+export const DAY_MINUTES = 24 * 60
+
+/** `HH:MM` for minutes since midnight, clamped to 00:00–24:00 */
+export function minutesToClock(minutes: number): string {
+  const clamped = Math.min(Math.max(Math.round(minutes), 0), DAY_MINUTES)
+  return `${pad2(Math.floor(clamped / 60))}:${pad2(clamped % 60)}`
+}
+
+/*
+ * Shared time-span helpers (week grid, day view, home agenda, entry form, poster). A time is an ISO
+ * datetime (`YYYY-MM-DDTHH:MM[:SS]`) or a bare clock (`HH:MM`); a TimeSpan is `{ start, end }` in either
+ * form. All results are on the span's start day: minutes 0–1440, with 1440 meaning 24:00.
+ */
+
+export interface TimeSpan {
+  start: string
+  end: string
+}
+
+/** The last minute a time picker offers; an end at 23:59 stands for 24:00 (the entry form sends it for 结束于 24:00) */
+export const LAST_MINUTE = '23:59'
+
+const DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}[T ]/
+
+/** `YYYY-MM-DD` of an ISO datetime; '' for a bare clock */
+function datePart(time: string): string {
+  return DATE_PREFIX_RE.test(time) ? time.slice(0, 10) : ''
+}
+
+/** `HH:MM` of an ISO datetime or of a bare clock */
+function clockPart(time: string): string {
+  return datePart(time) ? time.slice(11, 16) : time.slice(0, 5)
+}
+
+/**
+ * Start and end of a span in minutes on its start day, or null when it has no length.
+ * - Dates are compared only when both times carry one: an end on a later date counts as 24:00, an end on
+ *   an earlier date makes the span invalid (null).
+ * - For bare clocks (or mixed forms) an end before the start crosses midnight and counts as 24:00.
+ * - An end at 23:59 counts as 24:00.
+ */
+export function spanMinutes(start: string, end: string): { start: number, end: number } | null {
+  const from = timeToMinutes(clockPart(start))
+  const endClock = clockPart(end)
+  let to = endClock === LAST_MINUTE ? DAY_MINUTES : timeToMinutes(endClock)
+  const startDate = datePart(start)
+  const endDate = datePart(end)
+  if (startDate && endDate) {
+    if (endDate > startDate)
+      to = DAY_MINUTES
+    else if (endDate < startDate)
+      return null
+  }
+  else if (to < from) {
+    to = DAY_MINUTES
+  }
+  return to > from ? { start: from, end: Math.min(to, DAY_MINUTES) } : null
+}
+
+/** A clock for display: `23:59` reads `24:00`, anything else is unchanged */
+export function displayClock(clock: string): string {
+  return clock === LAST_MINUTE ? minutesToClock(DAY_MINUTES) : clock
+}
+
+/** End time of a span for display: `24:00` when it ends at 23:59 or runs past midnight, otherwise its end clock */
+export function displayEndClock(span: TimeSpan): string {
+  const minutes = spanMinutes(span.start, span.end)
+  return minutes?.end === DAY_MINUTES ? minutesToClock(DAY_MINUTES) : displayClock(clockPart(span.end))
+}
+
+/** Length of the clock rows added before the first or after the last section (minutes) */
+const CLOCK_ROW_MINUTES = 60
+
+/**
+ * The rows a week's grid shows: the term's section table (sectionRows), plus clock rows with `section: 0`
+ * only as far as `spans` reach outside it. Clock rows are 60 minutes, anchored at the table's first start
+ * and last end — 07:00–08:00, 06:00–07:00 … before; 21:30–22:30, 22:30–23:30, 23:30–24:00 after — with the
+ * outermost row trimmed to 00:00 or 24:00. Spans without length are ignored; when nothing reaches outside,
+ * the section table is returned unchanged.
+ */
+export function weekGridRows(term: Term | null | undefined, spans: TimeSpan[]): SectionRow[] {
+  const sections = sectionRows(term)
+  if (!sections.length)
+    return sections
+  const first = timeToMinutes(sections[0].start)
+  const last = timeToMinutes(sections[sections.length - 1].end)
+  let earliest = first
+  let latest = last
+  for (const span of spans) {
+    const minutes = spanMinutes(span.start, span.end)
+    if (!minutes)
+      continue
+    earliest = Math.min(earliest, minutes.start)
+    latest = Math.max(latest, minutes.end)
+  }
+  const before: SectionRow[] = []
+  for (let end = first; end > earliest && end > 0; end -= CLOCK_ROW_MINUTES)
+    before.unshift({ section: 0, start: minutesToClock(end - CLOCK_ROW_MINUTES), end: minutesToClock(end) })
+  const after: SectionRow[] = []
+  for (let start = last; start < latest && start < DAY_MINUTES; start += CLOCK_ROW_MINUTES)
+    after.push({ section: 0, start: minutesToClock(start), end: minutesToClock(start + CLOCK_ROW_MINUTES) })
+  return before.length || after.length ? [...before, ...sections, ...after] : sections
+}
+
 /**
  * 日程在网格里的纵向位置：有节次的按节次，没有节次（自定义时间）的按时刻
  */
@@ -208,8 +333,10 @@ export function occurrenceRowSpan(occurrence: Occurrence, rows: SectionRow[]): R
     const bottom = endIndex >= 0 ? endIndex + 1 : Math.min(end_section, rows.length)
     return { top, span: Math.max(bottom - top, 1) }
   }
-  const top = timeToRowPosition(clockOf(occurrence.start), rows)
-  const bottom = timeToRowPosition(clockOf(occurrence.end), rows)
+  const minutes = spanMinutes(occurrence.start, occurrence.end)
+  // A span without length still gets a half-row sliver at its start
+  const top = minutesToRowPosition(minutes ? minutes.start : timeToMinutes(clockOf(occurrence.start)), rows)
+  const bottom = minutes ? minutesToRowPosition(minutes.end, rows) : top
   return { top, span: Math.max(bottom - top, 0.5) }
 }
 
@@ -330,6 +457,178 @@ export function weekSuspendedReason(view: WeekView | null | undefined): string {
       reasons.push(reason)
   }
   return reasons.join(' · ')
+}
+
+/** 校历停课日的课（status suspended）：照常显示，但服务端不提醒、不算冲突、不进 ICS */
+export function isSuspended(item: Pick<Occurrence, 'status'>): boolean {
+  return item.status === 'suspended'
+}
+
+/** 调休搬来的课原本的周几（1–7）；不是调休搬来的课为 0 */
+export function swapFromWeekday(item: Pick<Occurrence, 'swap_from'>): number {
+  const weekday = item.swap_from
+  return typeof weekday === 'number' && Number.isInteger(weekday) && weekday >= 1 && weekday <= 7 ? weekday : 0
+}
+
+/** 调休搬来的课在列表里标「调休」，其它为空串 */
+export function swapNote(item: Pick<Occurrence, 'swap_from'>): string {
+  return swapFromWeekday(item) ? SWAP_NOTE : ''
+}
+
+type CalendarDayInfo = Pick<WeekDay, 'kind' | 'label' | 'follows_weekday'>
+
+/** 这天自己的课是否停上：放假 / 考试周，或按别的周几上课的调休日 */
+export function calendarSuspendsOwnLessons(day: Pick<WeekDay, 'kind' | 'follows_weekday'> | null | undefined): boolean {
+  if (!day)
+    return false
+  return suspendsClasses(day.kind) || (day.kind === 'swap' && !!day.follows_weekday)
+}
+
+/** 停课原因：调休日写按周几上课，其余用校历名称，没有名称时用放假 / 考试周 */
+function calendarReason(day: CalendarDayInfo | null | undefined): string {
+  const kind = day?.kind
+  if (kind === 'swap' && day?.follows_weekday)
+    return `调休，按周${WEEKDAY_LABELS[day.follows_weekday - 1] ?? day.follows_weekday}课表上课`
+  if (day?.label)
+    return day.label
+  return suspendsClasses(kind) ? SUSPENDED_LABELS[kind] : '校历停课'
+}
+
+/** 详情里停课课程的说明：`本次停课：9/25 中秋节放假`；不是停课的课为空串 */
+export function suspendedNotice(item: Pick<Occurrence, 'status' | 'date'>, day: CalendarDayInfo | null | undefined): string {
+  return isSuspended(item) ? `本次停课：${shortDate(item.date)} ${calendarReason(day)}` : ''
+}
+
+/** 详情里「照常上课」的说明：`已设为照常上课：9/25 中秋节放假` */
+export function heldNotice(item: Pick<Occurrence, 'date'>, day: CalendarDayInfo | null | undefined): string {
+  return `已设为照常上课：${shortDate(item.date)} ${calendarReason(day)}`
+}
+
+/** 详情里调休课的说明：`调休：按周二课表上课`；不是调休搬来的课为空串 */
+export function swapDescription(item: Pick<Occurrence, 'swap_from'>): string {
+  const weekday = swapFromWeekday(item)
+  return weekday ? `调休：按周${WEEKDAY_LABELS[weekday - 1]}课表上课` : ''
+}
+
+/**
+ * 受校历停课影响的日程：课程类的存储条目。其它（手动添加）、考试、书院课、活动、预约从不按校历停课，
+ * 也就没有「照常上课」「恢复按校历停课」
+ */
+export function isCalendarLesson(item: Occurrence): boolean {
+  return item.kind === 'course' && isEditableOccurrence(item)
+}
+
+/**
+ * 「照常上课」：课程类存储条目（isCalendarLesson）在校历停课日仍按普通日程返回（ignore_calendar 在这一周生效）。
+ * 条目详情的调整里有这个键就以它为准；没加载详情或没有这个键时，按“停课日 + status 为空 + 不是调休副本”推断。
+ * 不返回 swap_from 的旧后端没有这项功能
+ */
+export function heldDespiteCalendar(
+  item: Occurrence,
+  day: Pick<WeekDay, 'kind' | 'follows_weekday'> | null | undefined,
+  entry?: Entry | null,
+): boolean {
+  if (!isCalendarLesson(item) || item.swap_from === undefined || item.status !== '' || swapFromWeekday(item))
+    return false
+  if (!calendarSuspendsOwnLessons(day))
+    return false
+  const resolved = entry ? effectiveOverrideAt(entry, item.week).fields.ignore_calendar : undefined
+  return resolved ?? true
+}
+
+/*
+ * Week grid: a short tag under each day header, the full labels in one strip above the grid.
+ * The day view has room for the full label and keeps using calendarLabelClass directly.
+ */
+
+/** Keywords that turn an event name into a day-header tag of at most two characters, checked in order */
+const CALENDAR_SHORT_KEYWORDS: [keyword: string, short: string][] = [
+  ['公休', '公休'],
+  ['调休', '调休'],
+  ['补课', '补课'],
+  ['考试', '考试'],
+  ['放假', '放假'],
+  ['停课', '停课'],
+]
+
+/** Tag when the name has no keyword; a plain info event gets a dot instead of text */
+const CALENDAR_SHORT_FALLBACKS: Record<CalendarKind, string> = {
+  holiday: '放假',
+  exam: '考试',
+  swap: '调休',
+  info: '',
+}
+
+/**
+ * Day-header tag for a calendar event: a keyword found in its name (中秋节放假 → 放假,
+ * 公休，课程照常进行 → 公休), else the kind's generic word; '' for an info event without a keyword
+ */
+export function calendarShortLabel(kind: CalendarKind | null | undefined, label: string | null | undefined): string {
+  if (!kind)
+    return ''
+  const name = label ?? ''
+  const match = CALENDAR_SHORT_KEYWORDS.find(([keyword]) => name.includes(keyword))
+  return match ? match[1] : CALENDAR_SHORT_FALLBACKS[kind] ?? ''
+}
+
+const CALENDAR_DOT_CLASSES: Record<CalendarKind, string> = {
+  holiday: 'bg-error',
+  exam: 'bg-error',
+  swap: 'bg-primary',
+  info: 'bg-fg-3',
+}
+
+/** Dot colour for a day whose event has no short tag (same hues as calendarLabelClass) */
+export function calendarDotClass(kind: CalendarKind | null | undefined): string {
+  return kind ? CALENDAR_DOT_CLASSES[kind] ?? '' : ''
+}
+
+/** `9/25`; `9/26–27` within a month; `9/30–10/1` across months */
+export function shortDateRange(start: string, end: string): string {
+  if (start === end)
+    return shortDate(start)
+  const [, startMonth] = start.split('-')
+  const [, endMonth, endDay] = end.split('-')
+  return startMonth === endMonth && endDay
+    ? `${shortDate(start)}–${Number(endDay)}`
+    : `${shortDate(start)}–${shortDate(end)}`
+}
+
+export interface WeekCalendarNote {
+  start: string
+  end: string
+  /** `9/25` / `9/26–27` */
+  range: string
+  label: string
+  kind: CalendarKind
+  labelClass: string
+}
+
+/**
+ * The week's calendar labels for the strip above the grid, with consecutive days of the same event
+ * merged: `9/25 中秋节放假`, `9/26–27 公休，课程照常进行`. Empty when no day of the week has a label.
+ */
+export function weekCalendarNotes(view: WeekView | null | undefined): WeekCalendarNote[] {
+  const notes: WeekCalendarNote[] = []
+  const dates = view?.week_dates ?? []
+  for (let index = 0; index < dates.length; index++) {
+    const iso = dates[index]
+    const info = dayInfo(view, index)
+    if (!info?.kind)
+      continue
+    const kind = info.kind
+    const label = info.label || (suspendsClasses(kind) ? SUSPENDED_LABELS[kind] : '')
+    if (!label)
+      continue
+    const last = notes[notes.length - 1]
+    if (last && last.kind === kind && last.label === label && addDays(last.end, 1) === iso) {
+      last.end = iso
+      last.range = shortDateRange(last.start, iso)
+      continue
+    }
+    notes.push({ start: iso, end: iso, range: shortDate(iso), label, kind, labelClass: calendarLabelClass(kind) })
+  }
+  return notes
 }
 
 /* -------------------- 日期与学期定位 -------------------- */
@@ -535,7 +834,7 @@ export function describeSections(start: number | null | undefined, end: number |
 export function describeOccurrenceTime(item: Occurrence): string {
   const parts = [
     `${chineseDate(item.date)} 周${WEEKDAY_LABELS[item.weekday - 1] ?? ''}`,
-    `${clockOf(item.start)}–${clockOf(item.end)}`,
+    `${clockOf(item.start)}–${displayEndClock(item)}`,
   ]
   const sections = describeSections(item.start_section, item.end_section)
   if (sections)
@@ -543,7 +842,7 @@ export function describeOccurrenceTime(item: Occurrence): string {
   return parts.join(' · ')
 }
 
-export type DetailActionKey = 'activity' | 'appoint' | 'edit' | 'cancel_once' | 'reset' | 'hide' | 'unhide' | 'delete'
+export type DetailActionKey = 'activity' | 'appoint' | 'edit' | 'cancel_once' | 'hold' | 'unhold' | 'reset' | 'hide' | 'unhide' | 'delete'
 
 export interface DetailAction {
   key: DetailActionKey
@@ -551,12 +850,16 @@ export interface DetailAction {
   primary: boolean
   /** 红色文字的破坏性操作 */
   danger?: boolean
+  /** 文案长，独占一行 */
+  wide?: boolean
 }
 
 export interface DetailActionContext {
   hidden: boolean
   /** 已加载的条目详情；未加载 / 加载失败时为 null，此时按最保守的集合给操作 */
   entry?: Entry | null
+  /** 已设为照常上课（heldDespiteCalendar） */
+  held?: boolean
 }
 
 /** 存储条目（含手动考试）的日程：有 entry_id 且来源是本系统存储的 */
@@ -566,7 +869,9 @@ export function isEditableOccurrence(item: Occurrence): boolean {
 
 /**
  * 详情弹层的操作：书院课 / 活动 → 查看活动，预约 → 查看预约；
- * 存储条目 → 编辑、本次停课（考试除外）、恢复默认（有调整时）、删除（手动条目）；任何日程都可隐藏 / 取消隐藏
+ * 存储条目 → 编辑、本次停课（考试除外）、恢复默认（有调整时）、删除（手动条目）；任何日程都可隐藏 / 取消隐藏。
+ * 校历停课日的课以「照常上课」为主操作、不再给本次停课；已设为照常上课的课多一个「恢复按校历停课」。
+ * 这两个操作只给课程类存储条目（isCalendarLesson）
  */
 export function detailActionsFor(item: Occurrence, context: DetailActionContext): DetailAction[] {
   const actions: DetailAction[] = []
@@ -578,9 +883,15 @@ export function detailActionsFor(item: Occurrence, context: DetailActionContext)
     actions.push({ key: 'appoint', label: '查看预约', primary: true })
   }
   else if (isEditableOccurrence(item)) {
-    actions.push({ key: 'edit', label: '编辑', primary: true })
-    if (item.kind !== 'exam')
+    const suspended = isSuspended(item)
+    const lesson = isCalendarLesson(item)
+    if (suspended && lesson)
+      actions.push({ key: 'hold', label: '照常上课（恢复显示并提醒）', primary: true, wide: true })
+    actions.push({ key: 'edit', label: '编辑', primary: !suspended })
+    if (item.kind !== 'exam' && !suspended)
       actions.push({ key: 'cancel_once', label: '本次停课', primary: false })
+    if (context.held && lesson)
+      actions.push({ key: 'unhold', label: '恢复按校历停课', primary: false })
     if (entry?.overrides?.length)
       actions.push({ key: 'reset', label: '恢复默认', primary: false })
   }
@@ -597,6 +908,19 @@ export function detailActionsFor(item: Occurrence, context: DetailActionContext)
 /** 条目是否跨多个周（编辑时才需要选择范围） */
 export function entrySpansWeeks(entry: Entry): boolean {
   return entry.week_end > entry.week_start
+}
+
+export interface ScopedPatch {
+  payload: EntryPatch
+  options: { scope: EditScope, week?: number }
+}
+
+/** 照常上课（true）/ 恢复按校历停课（false）的 PATCH：single / following 带第 week 周，all 不带 */
+export function ignoreCalendarPatch(value: boolean, scope: EditScope, week: number): ScopedPatch {
+  return {
+    payload: { ignore_calendar: value },
+    options: scope === 'all' ? { scope } : { scope, week },
+  }
 }
 
 /** 调整在第 week 周是否生效（null 边界为开区间） */
@@ -757,8 +1081,10 @@ export interface ReminderCache {
   checked_at: number
 }
 
-/** Device preference shared by every account on this phone */
+/** Device preferences shared by every account on this phone */
 const SHOW_HIDDEN_KEY = 'timetable_show_hidden'
+const WEEKEND_MODE_KEY = 'timetable_weekend_mode'
+const SWIPE_HINT_SEEN_KEY = 'timetable_swipe_hint_seen'
 
 function readStorage<T>(key: string): T | null {
   try {
@@ -820,12 +1146,46 @@ export function saveLocalHiddenIds(account: string, ids: string[]) {
   writePersonalStorage(PERSONAL_STORAGE_KEYS.hiddenIds, account, ids)
 }
 
+/** Week-grid density: compact fits sections 1–12 to the screen, relaxed uses taller rows and scrolls */
+export type TimetableDensity = 'compact' | 'relaxed'
+
+export function readDensity(account: string): TimetableDensity {
+  return readPersonalStorage<string>(PERSONAL_STORAGE_KEYS.density, account) === 'relaxed' ? 'relaxed' : 'compact'
+}
+
+export function saveDensity(account: string, density: TimetableDensity) {
+  writePersonalStorage(PERSONAL_STORAGE_KEYS.density, account, density)
+}
+
 export function readShowHidden(): boolean {
   return readStorage<boolean>(SHOW_HIDDEN_KEY) === true
 }
 
 export function saveShowHidden(value: boolean) {
   writeStorage(SHOW_HIDDEN_KEY, value)
+}
+
+/**
+ * Weekend columns of the week grid. They show by default; `hide` is only ever the user's own choice
+ * (「隐藏周末」 in the timetable settings) and is never inferred from the week's data.
+ */
+export type WeekendMode = 'show' | 'hide'
+
+export function readWeekendMode(): WeekendMode {
+  return readStorage<string>(WEEKEND_MODE_KEY) === 'hide' ? 'hide' : 'show'
+}
+
+export function saveWeekendMode(mode: WeekendMode) {
+  writeStorage(WEEKEND_MODE_KEY, mode)
+}
+
+/** The one-time "swipe to change weeks" hint has been shown on this phone */
+export function readSwipeHintSeen(): boolean {
+  return readStorage<boolean>(SWIPE_HINT_SEEN_KEY) === true
+}
+
+export function markSwipeHintSeen() {
+  writeStorage(SWIPE_HINT_SEEN_KEY, true)
 }
 
 export function readReminderCache(account: string): ReminderCache | null {
