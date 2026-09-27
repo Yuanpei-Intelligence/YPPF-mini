@@ -23,6 +23,7 @@ Command rules:
 - A mini-program build may try to open WeChat DevTools. If automatic opening fails, manually import `dist/dev/mp-weixin` or `dist/build/mp-weixin`.
 - `pnpm lint:fix` can modify unrelated files across the repository. Prefer targeted ESLint fixes, inspect the diff, and then run the full lint command.
 - The package still contains H5 and App scripts from the upstream scaffold. They are legacy, non-target paths and are not required for implementation or acceptance unless a task explicitly says otherwise.
+- WeChat DevTools troubleshooting (stale compiled output, a killed `dev:mp` watcher, expired dev JWTs, miniprogram-automator selector limits): see `docs/devtools-troubleshooting.md`.
 
 ## Core principles
 
