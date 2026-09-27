@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { getSettings, getSubscribeTemplates, grantSubscribe } from '@/api/timetable'
+import { useUserStore } from '@/store/user'
 import { readReminderCache, saveReminderCache } from '@/utils/timetable'
 
 /** 本机缓存多久之内不再向服务端核对模板 id 与提醒开关 */
@@ -54,12 +55,15 @@ function requestSubscribeMessage(templateId: string): Promise<SubscribeOutcome> 
  * 模板 id 与提醒开关缓存在本机，一天内不重复向服务端核对。
  */
 export function useClassReminder() {
-  const templateId = ref<string | null>(readReminderCache()?.template_id ?? null)
+  const userStore = useUserStore()
+  /** Reminder state belongs to the signed-in account; read it at call time */
+  const account = () => userStore.userInfo.username
+  const templateId = ref<string | null>(readReminderCache(account())?.template_id ?? null)
   let subscribing = false
 
   /** 取模板 id：缓存一天内有效，否则向服务端查询并更新缓存；查询失败时退回缓存值 */
   async function ensureTemplateId(options: { force?: boolean } = {}): Promise<string | null> {
-    const cached = readReminderCache()
+    const cached = readReminderCache(account())
     if (!options.force && cached && Date.now() - cached.checked_at < CACHE_TTL_MS) {
       templateId.value = cached.template_id
       return templateId.value
@@ -67,7 +71,7 @@ export function useClassReminder() {
     try {
       const data = await getSubscribeTemplates()
       templateId.value = data.class_reminder.template_id
-      saveReminderCache({ enabled: cached?.enabled ?? false, template_id: templateId.value, checked_at: Date.now() })
+      saveReminderCache(account(), { enabled: cached?.enabled ?? false, template_id: templateId.value, checked_at: Date.now() })
     }
     catch (error) {
       console.error('获取订阅模板失败:', error)
@@ -78,8 +82,8 @@ export function useClassReminder() {
 
   /** 设置页保存提醒开关后同步到本机缓存 */
   function rememberEnabled(enabled: boolean) {
-    const cached = readReminderCache()
-    saveReminderCache({
+    const cached = readReminderCache(account())
+    saveReminderCache(account(), {
       enabled,
       template_id: cached?.template_id ?? templateId.value,
       checked_at: cached?.checked_at ?? 0,
@@ -117,7 +121,7 @@ export function useClassReminder() {
    */
   async function resubscribeSilently(): Promise<void> {
     try {
-      let cached = readReminderCache()
+      let cached = readReminderCache(account())
       if (!cached || Date.now() - cached.checked_at >= CACHE_TTL_MS) {
         const [settings, templates] = await Promise.all([
           getSettings(),
@@ -128,7 +132,7 @@ export function useClassReminder() {
           template_id: templates.class_reminder.template_id,
           checked_at: Date.now(),
         }
-        saveReminderCache(cached)
+        saveReminderCache(account(), cached)
       }
       templateId.value = cached.template_id
       if (cached.enabled && cached.template_id)

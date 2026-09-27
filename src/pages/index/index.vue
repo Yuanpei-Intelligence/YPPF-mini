@@ -20,10 +20,12 @@ import PageState from '@/components/PageState.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { usePageRefresh } from '@/hooks/usePageRefresh'
+import { useUserStore } from '@/store/user'
 import { tokens } from '@/style/tokens'
 import { toBackendURL } from '@/utils'
+import { readAgendaCache, saveAgendaCache } from '@/utils/agenda-cache'
 import { formatRelativeTime } from '@/utils/format'
-import { filterSummary, readLocalHiddenIds, suspendsClasses } from '@/utils/timetable'
+import { filterSummary, readLocalHiddenIds, suspendsClasses, todayIso } from '@/utils/timetable'
 import { openWebview } from '@/utils/webview'
 
 defineOptions({
@@ -89,23 +91,45 @@ function onHomeTabChange(params: { index: number }) {
 
 /* -------------------- 我的日程 -------------------- */
 
-const agenda = ref<AgendaOut | null>(null)
+const userStore = useUserStore()
+/** This account's last successful agenda: rendered at once, then refreshed in the background */
+const cachedAgenda = readAgendaCache(userStore.userInfo.username, todayIso())
+
+const agenda = ref<AgendaOut | null>(cachedAgenda?.data ?? null)
 const agendaLoading = ref(true)
-/** 首屏日程加载失败的页内错误；已有数据时失败只 toast */
+/** 首屏日程加载失败的页内错误；已有数据（含本机缓存）时失败只 toast */
 const agendaError = ref('')
+/** Local `YYYY-MM-DD` the displayed agenda was fetched on */
+const agendaFetchedOn = ref(cachedAgenda?.date ?? '')
+/** Fetch time (ms) of the displayed agenda while it still comes from the cache; null once refreshed */
+const agendaCachedAt = ref<number | null>(cachedAgenda?.fetched_at ?? null)
+
+/** The displayed agenda is a cache from an earlier day */
+const agendaStale = computed(() => agendaFetchedOn.value !== '' && agendaFetchedOn.value < todayIso())
 const settings = ref<Settings | null>(null)
 const filterSheet = ref<FilterSheetInstance | null>(null)
 const filterSaving = ref(false)
-const localHiddenIds = ref<string[]>(readLocalHiddenIds())
+const localHiddenIds = ref<string[]>(readLocalHiddenIds(userStore.userInfo.username))
 
 /** 课表页里本机隐藏的日程（没有 entry_id 的书院课 / 活动 / 预约）在首页同样不显示 */
 const agendaDays = computed<AgendaDay[]>(() => {
   const hidden = new Set(localHiddenIds.value)
-  return (agenda.value?.days ?? []).map(day => ({
-    ...day,
-    occurrences: day.occurrences.filter(item => !item.hidden && !hidden.has(item.id)),
-  }))
+  // A stale cache still lists days that have passed; skip them until fresh data arrives
+  const today = agendaStale.value ? todayIso() : ''
+  return (agenda.value?.days ?? [])
+    .filter(day => !today || day.date >= today)
+    .map(day => ({
+      ...day,
+      occurrences: day.occurrences.filter(item => !item.hidden && !hidden.has(item.id)),
+    }))
 })
+
+/** Shown when the refresh did not succeed and the cached agenda stays on screen */
+const agendaCacheHint = computed(() => (
+  agendaCachedAt.value !== null && !agendaLoading.value && agenda.value
+    ? `上次更新：${formatRelativeTime(agendaCachedAt.value)}`
+    : ''
+))
 
 /** 「筛选」按钮角标：有来源 / 标签被关闭时显示 已开启/全部 */
 const filterBadge = computed(() => {
@@ -150,6 +174,9 @@ async function loadAgenda(): Promise<unknown> {
     if (seq === agendaSeq) {
       agenda.value = data
       agendaError.value = ''
+      agendaFetchedOn.value = todayIso()
+      agendaCachedAt.value = null
+      saveAgendaCache(userStore.userInfo.username, agendaFetchedOn.value, data)
     }
     return null
   }
@@ -216,7 +243,7 @@ function openOccurrence(item: Occurrence) {
 }
 
 function openDay(date: string) {
-  uni.navigateTo({ url: `/pages/timetable/day?date=${encodeURIComponent(date)}` })
+  uni.navigateTo({ url: `/pages-timetable/day?date=${encodeURIComponent(date)}` })
 }
 
 function goTimetable() {
@@ -224,7 +251,7 @@ function goTimetable() {
 }
 
 function goImport() {
-  uni.navigateTo({ url: '/pages/timetable/import' })
+  uni.navigateTo({ url: '/pages-timetable/import' })
 }
 
 /* -------------------- 最新发布 -------------------- */
@@ -350,7 +377,7 @@ async function reloadFeed() {
 
 /** 两个 tab 的数据一起刷新；多个请求同时失败只提示一次 */
 async function refreshHome() {
-  localHiddenIds.value = readLocalHiddenIds()
+  localHiddenIds.value = readLocalHiddenIds(userStore.userInfo.username)
   const failures = await Promise.all([loadCarousel(), loadAgenda(), loadSettings(), loadFeed()])
   const failure = failures.find(Boolean)
   if (failure) {
@@ -458,12 +485,13 @@ onMounted(async () => {
         </view>
       </view>
 
+      <text v-if="agendaCacheHint" class="block px-1 text-xs text-fg-3">{{ agendaCacheHint }}</text>
       <PageState v-if="agendaError && !agenda" :error="agendaError" @retry="reloadAgenda" />
       <AgendaList
         v-else
         :days="agendaDays"
         :loading="agendaLoading"
-        :today="agenda?.from"
+        :today="agendaStale ? '' : agenda?.from"
         :empty-text="agendaEmptyText"
         @select="openOccurrence"
         @open-day="openDay"

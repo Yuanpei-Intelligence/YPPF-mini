@@ -21,6 +21,7 @@ import type {
   WeekView,
 } from '@/api/types/timetable'
 import { tokens } from '@/style/tokens'
+import { PERSONAL_STORAGE_KEYS, readPersonalStorage, removePersonalStorage, writePersonalStorage } from '@/utils/personal-storage'
 
 // @unocss-include
 // 上面这行让 UnoCSS 扫描本文件：这里的校历配色表以字符串形式返回 class（.ts 默认不在扫描范围内）。
@@ -756,12 +757,8 @@ export interface ReminderCache {
   checked_at: number
 }
 
-const PKU_CRED_KEY = 'pku_cred'
-const WEEK_VIEW_CACHE_KEY = 'timetable_week_view'
-const LOCAL_HIDDEN_KEY = 'timetable_hidden_ids'
+/** Device preference shared by every account on this phone */
 const SHOW_HIDDEN_KEY = 'timetable_show_hidden'
-const REMINDER_CACHE_KEY = 'timetable_reminder'
-const CATALOG_PICK_KEY = 'timetable_catalog_pick'
 
 function readStorage<T>(key: string): T | null {
   try {
@@ -782,49 +779,45 @@ function writeStorage(key: string, value: unknown) {
   }
 }
 
-function removeStorage(key: string) {
-  try {
-    uni.removeStorageSync(key)
-  }
-  catch {
-    // 忽略
-  }
-}
+/*
+ * The helpers below hold personal data: they take the signed-in account
+ * (`useUserStore().userInfo.username`) and are cleared on logout (see utils/personal-storage).
+ */
 
-export function readPkuCredential(): PkuCredential | null {
-  const value = readStorage<PkuCredential>(PKU_CRED_KEY)
+export function readPkuCredential(account: string): PkuCredential | null {
+  const value = readPersonalStorage<PkuCredential>(PERSONAL_STORAGE_KEYS.pkuCredential, account)
   if (!value || typeof value.username !== 'string' || typeof value.password !== 'string' || !value.username || !value.password)
     return null
   return value
 }
 
-export function savePkuCredential(credential: PkuCredential) {
-  writeStorage(PKU_CRED_KEY, credential)
+export function savePkuCredential(account: string, credential: PkuCredential) {
+  writePersonalStorage(PERSONAL_STORAGE_KEYS.pkuCredential, account, credential)
 }
 
-export function clearPkuCredential() {
-  removeStorage(PKU_CRED_KEY)
+export function clearPkuCredential(account: string) {
+  removePersonalStorage(PERSONAL_STORAGE_KEYS.pkuCredential, account)
 }
 
-export function readCachedWeekView(): WeekView | null {
-  const value = readStorage<WeekView>(WEEK_VIEW_CACHE_KEY)
+export function readCachedWeekView(account: string): WeekView | null {
+  const value = readPersonalStorage<WeekView>(PERSONAL_STORAGE_KEYS.weekView, account)
   if (!value || !value.term || !Array.isArray(value.occurrences) || !Array.isArray(value.week_dates))
     return null
   return value
 }
 
-export function cacheWeekView(view: WeekView) {
-  writeStorage(WEEK_VIEW_CACHE_KEY, view)
+export function cacheWeekView(account: string, view: WeekView) {
+  writePersonalStorage(PERSONAL_STORAGE_KEYS.weekView, account, view)
 }
 
 /** 仅存在本机的隐藏列表（用于没有 entry_id 的书院课 / 活动 / 预约日程） */
-export function readLocalHiddenIds(): string[] {
-  const value = readStorage<unknown>(LOCAL_HIDDEN_KEY)
+export function readLocalHiddenIds(account: string): string[] {
+  const value = readPersonalStorage<unknown>(PERSONAL_STORAGE_KEYS.hiddenIds, account)
   return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
 }
 
-export function saveLocalHiddenIds(ids: string[]) {
-  writeStorage(LOCAL_HIDDEN_KEY, ids)
+export function saveLocalHiddenIds(account: string, ids: string[]) {
+  writePersonalStorage(PERSONAL_STORAGE_KEYS.hiddenIds, account, ids)
 }
 
 export function readShowHidden(): boolean {
@@ -835,8 +828,8 @@ export function saveShowHidden(value: boolean) {
   writeStorage(SHOW_HIDDEN_KEY, value)
 }
 
-export function readReminderCache(): ReminderCache | null {
-  const value = readStorage<ReminderCache>(REMINDER_CACHE_KEY)
+export function readReminderCache(account: string): ReminderCache | null {
+  const value = readPersonalStorage<ReminderCache>(PERSONAL_STORAGE_KEYS.reminder, account)
   if (!value || typeof value.enabled !== 'boolean' || typeof value.checked_at !== 'number')
     return null
   if (value.template_id !== null && typeof value.template_id !== 'string')
@@ -844,26 +837,26 @@ export function readReminderCache(): ReminderCache | null {
   return value
 }
 
-export function saveReminderCache(cache: ReminderCache) {
-  writeStorage(REMINDER_CACHE_KEY, cache)
+export function saveReminderCache(account: string, cache: ReminderCache) {
+  writePersonalStorage(PERSONAL_STORAGE_KEYS.reminder, account, cache)
 }
 
 /**
  * 课程库页“手动填写”交给表单页的课程库行：表单页只收到 catalog_id，
  * 具体字段从这里取（没有按 id 取单行的接口，也不想把整行塞进 URL）
  */
-export function saveCatalogPick(entry: CatalogEntry) {
-  writeStorage(CATALOG_PICK_KEY, entry)
+export function saveCatalogPick(account: string, entry: CatalogEntry) {
+  writePersonalStorage(PERSONAL_STORAGE_KEYS.catalogPick, account, entry)
 }
 
 /** 取出并校验暂存的课程库行；id 不符或没有时为 null */
-export function readCatalogPick(id: number): CatalogEntry | null {
-  const value = readStorage<CatalogEntry>(CATALOG_PICK_KEY)
+export function readCatalogPick(account: string, id: number): CatalogEntry | null {
+  const value = readPersonalStorage<CatalogEntry>(PERSONAL_STORAGE_KEYS.catalogPick, account)
   if (!value || value.id !== id || typeof value.name !== 'string')
     return null
   return { ...value, slots: Array.isArray(value.slots) ? value.slots : [] }
 }
 
-export function clearCatalogPick() {
-  removeStorage(CATALOG_PICK_KEY)
+export function clearCatalogPick(account: string) {
+  removePersonalStorage(PERSONAL_STORAGE_KEYS.catalogPick, account)
 }

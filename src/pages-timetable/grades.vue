@@ -103,7 +103,7 @@ function applyData(result: GradesOut) {
 
 function goImport() {
   leftForBinding = true
-  uni.navigateTo({ url: '/pages/timetable/import' })
+  uni.navigateTo({ url: '/pages-timetable/import' })
 }
 
 /**

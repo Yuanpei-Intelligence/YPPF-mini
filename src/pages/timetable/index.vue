@@ -11,6 +11,7 @@ import { useApiException } from '@/hooks/useApiException'
 import { useClassReminder } from '@/hooks/useClassReminder'
 import { useOccurrenceDetail } from '@/hooks/useOccurrenceDetail'
 import { useTimetableSync } from '@/hooks/useTimetableSync'
+import { useUserStore } from '@/store/user'
 import {
   AUDIT_BADGE,
   cacheWeekView,
@@ -255,6 +256,7 @@ const weekCells = computed<WeekCell[]>(() => {
   })
 })
 
+const userStore = useUserStore()
 let requestSeq = 0
 
 async function loadWeek(target: { term: string, week: number } | null, options: { silent?: boolean } = {}) {
@@ -270,7 +272,7 @@ async function loadWeek(target: { term: string, week: number } | null, options: 
     loadError.value = ''
     // 只缓存当前周，下次打开先用它秒开
     if (target === null || data.week === data.today.week)
-      cacheWeekView(data)
+      cacheWeekView(userStore.userInfo.username, data)
     if (data.occurrences.length === 0)
       void checkTermEntries(data.term.code)
     else
@@ -345,7 +347,7 @@ function goDay(index: number) {
   const iso = weekDates.value[index]
   if (!iso || !view.value)
     return
-  uni.navigateTo({ url: `/pages/timetable/day?date=${encodeURIComponent(iso)}&term=${encodeURIComponent(view.value.term.code)}` })
+  uni.navigateTo({ url: `/pages-timetable/day?date=${encodeURIComponent(iso)}&term=${encodeURIComponent(view.value.term.code)}` })
 }
 
 async function handleSync() {
@@ -361,10 +363,10 @@ async function handleSync() {
     if (outcome.retried) {
       // 记住的密码重试失败：先让用户看到原因，再转到导入页重新登录（页内 toast 会被新页面盖住）
       handleApiException(outcome.error)
-      setTimeout(() => uni.navigateTo({ url: '/pages/timetable/import' }), 1500)
+      setTimeout(() => uni.navigateTo({ url: '/pages-timetable/import' }), 1500)
     }
     else {
-      uni.navigateTo({ url: '/pages/timetable/import' })
+      uni.navigateTo({ url: '/pages-timetable/import' })
     }
     return
   }
@@ -376,7 +378,7 @@ function termQuery() {
 }
 
 function goImport(section?: 'settings') {
-  uni.navigateTo({ url: section ? `/pages/timetable/import?section=${section}` : '/pages/timetable/import' })
+  uni.navigateTo({ url: section ? `/pages-timetable/import?section=${section}` : '/pages-timetable/import' })
 }
 
 function openAddSheet() {
@@ -387,10 +389,10 @@ function onAddSelect(item: AddAction) {
   const query = termQuery()
   switch (item.key) {
     case 'catalog':
-      uni.navigateTo({ url: `/pages/timetable/catalog${query ? `?${query}` : ''}` })
+      uni.navigateTo({ url: `/pages-timetable/catalog${query ? `?${query}` : ''}` })
       return
     case 'manual':
-      uni.navigateTo({ url: `/pages/timetable/entry-form${query ? `?${query}` : ''}` })
+      uni.navigateTo({ url: `/pages-timetable/entry-form${query ? `?${query}` : ''}` })
       return
     case 'import':
       goImport()
@@ -401,18 +403,18 @@ function goPoster() {
   if (!view.value)
     return
   uni.navigateTo({
-    url: `/pages/timetable/poster?term=${encodeURIComponent(view.value.term.code)}&week=${view.value.week}`,
+    url: `/pages-timetable/poster?term=${encodeURIComponent(view.value.term.code)}&week=${view.value.week}`,
   })
 }
 
 function goGrades() {
-  uni.navigateTo({ url: '/pages/timetable/grades' })
+  uni.navigateTo({ url: '/pages-timetable/grades' })
 }
 
 let shownBefore = false
 
 onLoad(() => {
-  const cached = readCachedWeekView()
+  const cached = readCachedWeekView(userStore.userInfo.username)
   if (cached)
     view.value = cached
   void loadWeek(null)

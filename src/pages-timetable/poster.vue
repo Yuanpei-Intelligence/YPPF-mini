@@ -175,7 +175,7 @@ const subtitle = computed(() => {
   return `${data.term.name} · 第 ${data.week} 周${range}`
 })
 const visibleOccurrences = computed(() => {
-  const localHidden = new Set(readLocalHiddenIds())
+  const localHidden = new Set(readLocalHiddenIds(userStore.userInfo.username))
   return (view.value?.occurrences ?? []).filter(item => !item.hidden && !localHidden.has(item.id))
 })
 /** 图例只列本周出现过的类别；学校课程无角标，其余按角标文案 */
