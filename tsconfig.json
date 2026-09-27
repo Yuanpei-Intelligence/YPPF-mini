@@ -25,8 +25,7 @@
       "z-paging/types",
       "./src/types/async-component.d.ts",
       "./src/types/async-import.d.ts",
-      "./src/typings.d.ts",
-      "wot-design-uni/global.d.ts"
+      "./src/typings.d.ts"
     ],
     "allowJs": true,
     "noImplicitThis": true,
