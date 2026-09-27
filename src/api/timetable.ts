@@ -11,6 +11,8 @@ import type {
   ImportOut,
   ImportPortalIn,
   ImportTextIn,
+  OverviewOut,
+  OverviewQuery,
   Settings,
   SettingsPatch,
   SubscribeGrantIn,
@@ -39,6 +41,14 @@ export function getTerms() {
  */
 export function getWeek(query?: WeekQuery) {
   return http.get<WeekView>(`${BASE}/week/`, query, undefined, manualErrorPresentation)
+}
+
+/**
+ * 整个学期的每周时段与考试安排（海报用）；不传 term 时为当前学期。
+ * 学期不存在返回 404 `TERM_NOT_FOUND`；尚未提供此接口的旧后端同样是 404，但没有该错误码
+ */
+export function getOverview(query?: OverviewQuery) {
+  return http.get<OverviewOut>(`${BASE}/overview/`, query, undefined, manualErrorPresentation)
 }
 
 /**

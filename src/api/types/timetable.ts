@@ -112,6 +112,71 @@ export interface WeekView {
   days?: WeekDay[]
 }
 
+/* -------------------- 学期总览（海报） -------------------- */
+
+/** `GET overview/`：term 缺省为当前学期 */
+export interface OverviewQuery {
+  term?: string
+}
+
+/** 总览里的时段类别：活动与地下室预约不列出，考试单独列在 exams */
+export type OverviewSlotKind = Extract<OccurrenceKind, 'course' | 'college' | 'custom'>
+
+/**
+ * 整个学期（第 1..total_weeks 周）里的一个每周时段：同一条目在同一星期、时间、地点上的课合并为一个，
+ * 按周调整过时间 / 星期 / 地点的那几次单独成一个时段。放假等校历停课不在 weeks 里留空。
+ * 与周视图一样遵循来源开关、隐藏标签和隐藏条目。
+ */
+export interface OverviewSlot {
+  /** 稳定键，同一响应内唯一 */
+  key: string
+  kind: OverviewSlotKind
+  source: OccurrenceSource
+  title: string
+  /** 教师等补充信息，可能为空串 */
+  subtitle: string
+  location: string
+  /** 1=周一 … 7=周日 */
+  weekday: number
+  /** HH:MM */
+  start: string
+  end: string
+  start_section: number | null
+  end_section: number | null
+  /** 上课周次，升序 */
+  weeks: number[]
+  /** 周次文字：第3周 / 1-16周 / 1-15周 单周 / 2-16周 双周 / 1-8,10-16周 */
+  weeks_text: string
+  /** 周次恰好是单周 / 双周规律时为 1 / 2，否则为 0 */
+  parity: Parity
+  /** 稳定配色键（课程名或 id），与周视图一致 */
+  color_key: string
+  /** 已选 / 旁听；书院课为空串 */
+  role: EntryRole | ''
+  tag: string
+  /** {'entry_id'}（存储条目）| {'course_id'}（书院课） */
+  ref: Record<string, number | null>
+}
+
+/** 学期里的一场考试（已去重） */
+export interface OverviewExam {
+  title: string
+  /** YYYY-MM-DD */
+  date: string
+  /** HH:MM */
+  start: string
+  end: string
+  location: string
+  /** 所在教学周；不在 1..total_weeks 内为 null */
+  week: number | null
+}
+
+export interface OverviewOut {
+  term: Term
+  slots: OverviewSlot[]
+  exams: OverviewExam[]
+}
+
 export interface Occurrence {
   /** 稳定 id：`${source}:${key}:${date}` */
   id: string
