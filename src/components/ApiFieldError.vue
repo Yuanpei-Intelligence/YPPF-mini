@@ -9,7 +9,7 @@ defineProps<{
     <text
       v-for="message in messages"
       :key="message"
-      class="block text-xs text-[#f56c6c] leading-5"
+      class="block text-xs text-error leading-5"
     >
       {{ message }}
     </text>

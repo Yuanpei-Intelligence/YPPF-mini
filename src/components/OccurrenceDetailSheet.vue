@@ -146,30 +146,30 @@ defineExpose({ open, close })
           :style="{ backgroundColor: color?.fg }"
         />
         <view class="min-w-0 flex-1">
-          <text class="block text-lg text-gray-900 font-bold leading-6">{{ occurrence.title }}</text>
-          <text v-if="occurrence.subtitle" class="mt-1 block text-sm text-gray-500">{{ occurrence.subtitle }}</text>
+          <text class="block text-lg text-fg-1 font-bold leading-6">{{ occurrence.title }}</text>
+          <text v-if="occurrence.subtitle" class="mt-1 block text-sm text-fg-2">{{ occurrence.subtitle }}</text>
         </view>
         <view class="flex shrink-0 flex-col items-end gap-1">
-          <view class="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+          <view class="rounded-full bg-fill px-2 py-0.5 text-xs text-fg-2">
             {{ kindLabel }}
           </view>
-          <view v-if="roleLabel" class="rounded-full px-2 py-0.5 text-xs" :class="roleLabel === '旁听' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-600'">
+          <view v-if="roleLabel" class="rounded-full px-2 py-0.5 text-xs" :class="roleLabel === '旁听' ? 'bg-warning-light text-warning-dark' : 'bg-primary-light text-primary'">
             {{ roleLabel }}
           </view>
         </view>
       </view>
 
-      <view class="mt-4 text-sm text-gray-600 space-y-2">
+      <view class="mt-4 text-sm text-fg-2 space-y-2">
         <view class="flex items-start gap-2">
-          <text class="i-carbon-time mt-0.5 shrink-0 text-base text-gray-400" />
+          <text class="i-carbon-time mt-0.5 shrink-0 text-base text-fg-3" />
           <text class="flex-1">{{ time }}</text>
         </view>
         <view v-if="occurrence.location" class="flex items-start gap-2">
-          <text class="i-carbon-location mt-0.5 shrink-0 text-base text-gray-400" />
+          <text class="i-carbon-location mt-0.5 shrink-0 text-base text-fg-3" />
           <text class="flex-1">{{ occurrence.location }}</text>
         </view>
         <view v-if="tag" class="flex items-start gap-2">
-          <text class="i-carbon-tag mt-0.5 shrink-0 text-base text-gray-400" />
+          <text class="i-carbon-tag mt-0.5 shrink-0 text-base text-fg-3" />
           <text class="flex-1">{{ tag }}</text>
         </view>
         <view
@@ -177,38 +177,34 @@ defineExpose({ open, close })
           :key="index"
           class="flex items-start gap-2"
         >
-          <text class="mt-0.5 shrink-0 text-base text-gray-400" :class="row.icon" />
+          <text class="mt-0.5 shrink-0 text-base text-fg-3" :class="row.icon" />
           <text class="flex-1" :class="{ 'whitespace-pre-wrap break-all': row.multiline }">{{ row.text }}</text>
         </view>
         <view v-if="status" class="flex items-start gap-2">
-          <text class="i-carbon-information mt-0.5 shrink-0 text-base text-gray-400" />
+          <text class="i-carbon-information mt-0.5 shrink-0 text-base text-fg-3" />
           <text class="flex-1">{{ status }}</text>
         </view>
-        <view v-if="modified" class="flex items-start gap-2 text-amber-600">
+        <view v-if="modified" class="flex items-start gap-2 text-warning">
           <text class="i-carbon-edit mt-0.5 shrink-0 text-base" />
           <text class="flex-1">本次已调整</text>
         </view>
         <view v-if="hidden" class="flex items-start gap-2">
-          <text class="i-carbon-view-off mt-0.5 shrink-0 text-base text-gray-400" />
+          <text class="i-carbon-view-off mt-0.5 shrink-0 text-base text-fg-3" />
           <text class="flex-1">已隐藏</text>
         </view>
-        <view v-if="entryLoading" class="flex items-center gap-2 text-xs text-gray-400">
+        <view v-if="entryLoading" class="flex items-center gap-2 text-xs text-fg-3">
           <uv-loading-icon size="14" />
           <text>正在加载详情…</text>
         </view>
-        <text v-else-if="entryError" class="block text-xs text-gray-400">{{ entryError }}</text>
+        <text v-else-if="entryError" class="block text-xs text-fg-3">{{ entryError }}</text>
       </view>
 
       <view class="detail-actions mt-5">
         <button
           v-for="action in actions"
           :key="action.key"
-          class="detail-action rounded-lg py-2.5 text-sm font-medium"
-          :class="action.primary
-            ? 'bg-blue-500 text-white'
-            : action.danger
-              ? 'border border-red-200 bg-white text-red-500'
-              : 'border border-gray-200 bg-white text-gray-700'"
+          class="detail-action"
+          :class="action.primary ? 'btn-primary' : action.danger ? 'btn-danger' : 'btn-outline'"
           :disabled="busy"
           @click="onAction(action.key)"
         >
@@ -239,9 +235,5 @@ defineExpose({ open, close })
 .detail-action {
   flex: 1 1 40%;
   margin: 0;
-}
-
-button::after {
-  border: none;
 }
 </style>

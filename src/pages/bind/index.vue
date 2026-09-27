@@ -1,12 +1,14 @@
 <script lang="ts" setup>
 import type { UvToastInstance } from '@/hooks/useApiException'
 import { onLoad } from '@dcloudio/uni-app'
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { getUserMe, wxBind } from '@/api/login'
 import ApiFieldError from '@/components/ApiFieldError.vue'
+import FormField from '@/components/FormField.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
+import { tokens } from '@/style/tokens'
 import { openWebview } from '@/utils/webview'
 
 definePage({
@@ -15,16 +17,21 @@ definePage({
   },
 })
 
+const AGREE_KEY = 'agree'
+
 const signedOpenid = ref('')
 const username = ref('')
 const password = ref('')
-const agreedToTerms = ref(false)
+/** uv-checkbox-group 的选中值；勾选协议时含 AGREE_KEY */
+const agreeValues = ref<string[]>([])
+const agreedToTerms = computed(() => agreeValues.value.includes(AGREE_KEY))
 const submitting = ref(false)
 const toastRef = ref<UvToastInstance | null>(null)
 const {
   clearFieldError,
   getFieldMessages,
   handleApiException,
+  hasFieldErrors,
   setFieldError,
   showMessage,
 } = useApiException(toastRef)
@@ -39,46 +46,43 @@ function toTerms() {
   uni.navigateTo({ url: '/pages/generic/terms' })
 }
 
+watch(agreedToTerms, (agreed) => {
+  if (agreed)
+    clearFieldError('terms')
+})
+
 onLoad((options) => {
   if (options && options.signed_openid) {
     signedOpenid.value = decodeURIComponent(options.signed_openid)
   }
   else {
-    setFieldError('signed_openid', '缺少微信绑定凭据。', 'required')
+    setFieldError('signed_openid', '缺少微信绑定凭据，请重新进入小程序', 'required')
   }
-})
-
-onReady(() => {
-  if (!signedOpenid.value)
-    showMessage('缺少微信绑定凭据，请重新登录。', 'warning')
 })
 
 async function handleBind() {
   if (submitting.value)
     return
+  // 本地校验只走表单内联提示，不再叠加 toast
   let invalid = false
   if (!username.value) {
-    setFieldError('username', '请输入用户名。', 'required')
+    setFieldError('username', '请输入用户名', 'required')
     invalid = true
   }
   if (!password.value) {
-    setFieldError('password', '请输入密码。', 'required')
+    setFieldError('password', '请输入密码', 'required')
     invalid = true
   }
-  if (invalid) {
-    showMessage('请填写用户名和密码。', 'warning')
-    return
-  }
   if (!agreedToTerms.value) {
-    setFieldError('terms', '请先阅读并同意用户协议与隐私政策。', 'required')
-    showMessage('请先同意用户协议与隐私政策。', 'warning')
-    return
+    setFieldError('terms', '请先阅读并同意用户协议与隐私政策', 'required')
+    invalid = true
   }
   if (!signedOpenid.value) {
-    setFieldError('signed_openid', '绑定凭据无效，请重新登录。', 'invalid')
-    showMessage('绑定凭据无效，请重新登录。', 'warning')
-    return
+    setFieldError('signed_openid', '绑定凭据无效，请重新进入小程序', 'invalid')
+    invalid = true
   }
+  if (invalid)
+    return
 
   submitting.value = true
   try {
@@ -101,15 +105,18 @@ async function handleBind() {
         account_id: res.account_id ?? '',
         username: res.username ?? '',
       })
-      showMessage('绑定成功。', 'success')
+      showMessage('绑定成功', 'success')
       setTimeout(() => {
         uni.reLaunch({ url: '/pages/index/index' })
-      }, 1500)
+      }, 600)
     }
   }
   catch (err) {
     console.error(err)
-    handleApiException(err)
+    // 后端字段错误只在对应控件旁显示；没有字段错误时才 toast 一次
+    handleApiException(err, { showToast: false })
+    if (!hasFieldErrors.value)
+      handleApiException(err)
   }
   finally {
     submitting.value = false
@@ -119,201 +126,73 @@ async function handleBind() {
 
 <template>
   <uv-toast ref="toastRef" />
-  <view class="bind-page">
-    <view class="bind-header">
-      <view class="bind-header__title">
-        绑定现有账号
-      </view>
-      <view class="bind-header__desc">
-        请使用网页版 YPPF 个人账号完成绑定。如需登录小组账号，可以在“我的-切换账号”中登录您管理的小组。
-      </view>
-    </view>
+  <view class="yp-page px-4 py-4">
+    <text class="block text-sm text-fg-2 leading-relaxed">
+      请使用网页版 YPPF 个人账号完成绑定。如需登录小组账号，可以在「我的 · 切换账户」中登录您管理的小组。
+    </text>
 
-    <view class="bind-form">
-      <view class="bind-field">
-        <text class="bind-field__label">用户名</text>
+    <view class="mt-4 yp-card-flat">
+      <FormField label="用户名" required :messages="getFieldMessages('username')">
         <input
           v-model="username"
-          class="bind-field__input"
+          class="yp-input"
           type="text"
           placeholder="请输入用户名"
+          placeholder-class="text-fg-3"
           @input="clearFieldError('username')"
         >
-        <ApiFieldError :messages="getFieldMessages('username')" />
-      </view>
-      <view class="bind-field">
-        <text class="bind-field__label">密码</text>
+      </FormField>
+      <FormField label="密码" required :messages="getFieldMessages('password')">
         <input
           v-model="password"
-          class="bind-field__input"
+          class="yp-input"
           type="text"
           password
           placeholder="请输入密码"
+          placeholder-class="text-fg-3"
           @input="clearFieldError('password')"
         >
-        <ApiFieldError :messages="getFieldMessages('password')" />
+      </FormField>
+      <view class="mt-1 flex items-center gap-4 -ml-2">
+        <view class="btn-text min-h-88rpx" @click="openPublicWebview('/forgetpw/')">
+          忘记密码
+        </view>
+        <view class="btn-text min-h-88rpx" @click="openPublicWebview('/freshman/')">
+          注册账号
+        </view>
       </view>
-      <view class="bind-links">
-        <text class="bind-link" @click="openPublicWebview('/forgetpw/')">忘记密码</text>
-        <text class="bind-link bind-link--divider">|</text>
-        <text class="bind-link" @click="openPublicWebview('/freshman/')">注册</text>
-      </view>
+    </view>
 
-      <view class="bind-agree" @click="agreedToTerms = !agreedToTerms; clearFieldError('terms')">
-        <view
-          class="bind-checkbox"
-          :class="{ 'bind-checkbox--checked': agreedToTerms }"
-        >
-          <text v-if="agreedToTerms" class="bind-checkbox__icon">✓</text>
-        </view>
-        <view class="bind-agree__text">
-          我已阅读并同意
-          <text class="bind-agree__link" @click="toTerms">《用户协议》</text>
-          和
-          <text class="bind-agree__link" @click="toTerms">《隐私政策》</text>
-        </view>
-      </view>
+    <!-- 协议勾选 -->
+    <view class="mt-4 py-2">
+      <uv-checkbox-group
+        v-model="agreeValues"
+        shape="square"
+        :size="20"
+        :icon-size="12"
+        :active-color="tokens.primary"
+        :inactive-color="tokens.text4"
+      >
+        <uv-checkbox :name="AGREE_KEY">
+          <view class="ml-1 text-sm text-fg-2 leading-relaxed">
+            我已阅读并同意
+            <text class="text-primary" @click.stop="toTerms">《用户协议》</text>
+            和
+            <text class="text-primary" @click.stop="toTerms">《隐私政策》</text>
+          </view>
+        </uv-checkbox>
+      </uv-checkbox-group>
       <ApiFieldError :messages="getFieldMessages('terms')" />
       <ApiFieldError :messages="getFieldMessages('signed_openid')" />
-
-      <uv-button type="primary" shape="circle" :loading="submitting" :disabled="submitting" @click="handleBind">
-        绑定
-      </uv-button>
     </view>
+
+    <button
+      class="btn-primary mt-6 btn-block"
+      :loading="submitting"
+      :disabled="submitting"
+      @click="handleBind"
+    >
+      绑定
+    </button>
   </view>
 </template>
-
-<style lang="scss" scoped>
-.bind-page {
-  min-height: 100vh;
-  background: linear-gradient(180deg, #f0f7ff 0%, #f8fafc 100%);
-  padding: 48rpx 32rpx;
-}
-
-.bind-header {
-  margin-bottom: 48rpx;
-}
-
-.bind-header__title {
-  font-size: 44rpx;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 12rpx;
-}
-
-.bind-header__desc {
-  font-size: 28rpx;
-  color: #64748b;
-  line-height: 1.5;
-}
-
-.bind-form {
-  background: #fff;
-  border-radius: 24rpx;
-  padding: 40rpx;
-  box-shadow: 0 4rpx 24rpx rgba(0, 0, 0, 0.06);
-}
-
-.bind-field {
-  margin-bottom: 32rpx;
-}
-
-.bind-field__label {
-  display: block;
-  font-size: 28rpx;
-  font-weight: 500;
-  color: #334155;
-  margin-bottom: 16rpx;
-}
-
-.bind-field__input {
-  width: 100%;
-  height: 88rpx;
-  padding: 0 24rpx;
-  font-size: 30rpx;
-  color: #1e293b;
-  background: #f8fafc;
-  border: 2rpx solid #e2e8f0;
-  border-radius: 12rpx;
-  box-sizing: border-box;
-
-  &::placeholder {
-    color: #94a3b8;
-  }
-}
-
-.bind-links {
-  display: flex;
-  align-items: center;
-  gap: 16rpx;
-  margin-bottom: 40rpx;
-}
-
-.bind-link {
-  font-size: 26rpx;
-  color: #3b82f6;
-
-  &--divider {
-    color: #cbd5e1;
-    font-weight: 300;
-  }
-}
-
-.bind-agree {
-  display: flex;
-  align-items: flex-start;
-  gap: 20rpx;
-  margin-bottom: 48rpx;
-}
-
-.bind-checkbox {
-  width: 40rpx;
-  height: 40rpx;
-  flex-shrink: 0;
-  margin-top: 4rpx;
-  border: 2rpx solid #cbd5e1;
-  border-radius: 8rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-
-  &--checked {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-    border-color: #3b82f6;
-  }
-}
-
-.bind-checkbox__icon {
-  font-size: 24rpx;
-  font-weight: 600;
-  color: #fff;
-}
-
-.bind-agree__text {
-  font-size: 26rpx;
-  color: #64748b;
-  line-height: 1.6;
-}
-
-.bind-agree__link {
-  color: #3b82f6;
-}
-
-.bind-btn {
-  width: 100%;
-  height: 96rpx;
-  line-height: 96rpx;
-  font-size: 32rpx;
-  font-weight: 500;
-  color: #fff;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  border: none;
-  border-radius: 16rpx;
-  box-shadow: 0 8rpx 24rpx rgba(59, 130, 246, 0.35);
-
-  &::after {
-    border: none;
-  }
-}
-</style>

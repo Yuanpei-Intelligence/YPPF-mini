@@ -19,7 +19,9 @@ import AgendaFilterSheet from '@/components/AgendaFilterSheet.vue'
 import ApiFieldError from '@/components/ApiFieldError.vue'
 import { useApiException } from '@/hooks/useApiException'
 import { useClassReminder } from '@/hooks/useClassReminder'
+import { useConfirm } from '@/hooks/useConfirm'
 import { useTimetableSync } from '@/hooks/useTimetableSync'
+import { tokens } from '@/style/tokens'
 import { confirmModal } from '@/utils/dialog'
 import {
   clearPkuCredential,
@@ -35,8 +37,6 @@ import {
 definePage({
   style: {
     navigationBarTitleText: '导入与设置',
-    navigationBarBackgroundColor: '#2563eb',
-    navigationBarTextStyle: 'white',
   },
 })
 
@@ -66,6 +66,7 @@ const {
   handleApiException,
   showMessage,
 } = useApiException(toastRef)
+const { confirm } = useConfirm()
 let scrollToSettings = false
 
 // 北大账号
@@ -284,7 +285,7 @@ async function handleUnbind() {
     title: '解除绑定',
     content: '将删除服务端保存的门户会话与授权，以及本机记住的密码；已导入的课表不受影响。',
     confirmText: '解除绑定',
-    confirmColor: '#dc2626',
+    confirmColor: tokens.error,
   })
   if (!ok)
     return
@@ -440,18 +441,16 @@ function describeSubscribeOutcome(outcome: SubscribeOutcome) {
 }
 
 /** 用户关闭了订阅消息时引导去微信设置页打开 */
-function offerOpenSetting(outcome: SubscribeOutcome) {
+async function offerOpenSetting(outcome: SubscribeOutcome) {
   if (outcome !== 'disabled')
     return
-  uni.showModal({
+  const ok = await confirm({
     title: '订阅消息已关闭',
     content: '需要在微信的小程序设置中允许「上课提醒」订阅消息，是否前往设置？',
     confirmText: '去设置',
-    success: (res) => {
-      if (res.confirm)
-        uni.openSetting({})
-    },
   })
+  if (ok)
+    uni.openSetting({})
 }
 
 async function handleReminderToggle(value: boolean) {
@@ -481,7 +480,7 @@ async function handleReminderToggle(value: boolean) {
   if (pending) {
     const outcome = await pending
     reminderHint.value = describeSubscribeOutcome(outcome)
-    offerOpenSetting(outcome)
+    await offerOpenSetting(outcome)
     return
   }
   // 模板 id 还没取到：微信只接受点击手势内同步调起的订阅弹窗，这里补调会被拒绝，
@@ -517,7 +516,7 @@ async function handleReminderAuthorize() {
   reminderHint.value = ''
   const outcome = await subscribeReminder()
   reminderHint.value = describeSubscribeOutcome(outcome)
-  offerOpenSetting(outcome)
+  await offerOpenSetting(outcome)
 }
 
 async function handleCopyIcs() {
@@ -545,7 +544,7 @@ async function handleRotateIcs() {
     title: '重置订阅链接',
     content: '旧链接将立即失效，已添加到日历的订阅需要重新添加。',
     confirmText: '重置',
-    confirmColor: '#dc2626',
+    confirmColor: tokens.error,
   })
   if (!ok)
     return
@@ -577,27 +576,22 @@ onLoad((options) => {
 </script>
 
 <template>
-  <view class="min-h-screen bg-gray-50 pb-10">
+  <view class="min-h-screen bg-page pb-10">
     <uv-toast ref="toastRef" />
-    <view v-if="loading" class="flex flex-col items-center justify-center py-24 text-sm text-gray-400">
-      <uv-loading-icon mode="circle" />
-      <text class="mt-3">正在加载…</text>
-    </view>
-
-    <view v-else-if="loadError" class="flex flex-col items-center justify-center px-8 py-24 text-center">
-      <text class="i-carbon-warning-alt mb-3 text-3xl text-gray-300" />
-      <text class="text-sm text-gray-500 leading-6">{{ loadError }}</text>
-      <button class="mt-5 rounded-lg bg-blue-500 px-6 py-2 text-sm text-white" @click="load">
-        重试
-      </button>
-    </view>
+    <PageState
+      v-if="loading || loadError"
+      :loading="loading"
+      :error="loadError"
+      loading-text="正在加载…"
+      @retry="load"
+    />
 
     <view v-else class="px-4 pt-4 space-y-4">
       <!-- 学期 -->
-      <view class="flex items-center justify-between rounded-2xl bg-white px-4 py-3 shadow-sm">
-        <text class="text-sm text-gray-700">导入到学期</text>
+      <view class="flex items-center justify-between rounded-lg bg-card px-4 py-3 shadow-card">
+        <text class="text-sm text-fg-2">导入到学期</text>
         <picker :value="termIndex" :range="terms" range-key="name" @change="onTermChange">
-          <view class="flex items-center text-sm text-blue-600">
+          <view class="flex items-center text-sm text-primary">
             <text>{{ selectedTermName || '请选择学期' }}</text>
             <text class="i-carbon-chevron-down ml-1" />
           </view>
@@ -605,39 +599,39 @@ onLoad((options) => {
       </view>
 
       <!-- 北大账号 -->
-      <view class="rounded-2xl bg-white p-4 shadow-sm">
+      <view class="yp-card">
         <view class="flex items-center justify-between">
-          <text class="text-base text-gray-900 font-bold">北大账号</text>
+          <text class="text-base text-fg-1 font-bold">北大账号</text>
           <view
             class="rounded-full px-2 py-0.5 text-xs"
-            :class="binding?.bound ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'"
+            :class="binding?.bound ? 'bg-success-light text-success' : 'bg-fill text-fg-2'"
           >
             {{ binding?.bound ? '已绑定' : '未绑定' }}
           </view>
         </view>
-        <text class="mt-1 block text-xs text-gray-400 leading-5">
+        <text class="mt-1 block text-xs text-fg-3 leading-5">
           用门户账号自动获取本学期课表。密码只用于本次登录，服务端不保存密码。
         </text>
 
         <template v-if="binding && binding.bound">
-          <view class="mt-3 text-sm text-gray-600 space-y-1">
+          <view class="mt-3 text-sm text-fg-2 space-y-1">
             <view>学号：{{ binding.pku_username }}</view>
             <view>门户会话：{{ sessionLabel }}</view>
             <view>上次同步：{{ formatDateTime(binding.last_sync_at) || '尚未同步' }}</view>
-            <view v-if="lockedLabel" class="text-red-500">
+            <view v-if="lockedLabel" class="text-error">
               {{ lockedLabel }}
             </view>
           </view>
-          <view class="mt-3 flex items-center justify-between border-t border-gray-100 pt-3">
+          <view class="mt-3 flex items-center justify-between border-t border-line-light pt-3">
             <view>
-              <text class="block text-sm text-gray-700">允许使用门户课表数据</text>
-              <text class="block text-xs text-gray-400">关闭后无法自动同步</text>
+              <text class="block text-sm text-fg-2">允许使用门户课表数据</text>
+              <text class="block text-xs text-fg-3">关闭后无法自动同步</text>
             </view>
             <uv-switch
               :model-value="binding.consents.timetable"
               :disabled="consentSaving"
               size="22"
-              active-color="#2563eb"
+              :active-color="tokens.primary"
               @change="handleConsentChange"
             />
           </view>
@@ -646,14 +640,14 @@ onLoad((options) => {
         <template v-if="binding && binding.bound && !formVisible">
           <view class="mt-4 flex gap-3">
             <button
-              class="flex-1 rounded-lg bg-blue-500 py-2.5 text-sm text-white font-medium"
+              class="btn-primary flex-1"
               :disabled="busy"
               @click="handleRefresh"
             >
               {{ syncing ? '同步中…' : '立即刷新' }}
             </button>
             <button
-              class="flex-1 border border-gray-200 rounded-lg bg-white py-2.5 text-sm text-gray-700 font-medium"
+              class="btn-outline flex-1"
               :disabled="busy"
               @click="showLoginForm = true"
             >
@@ -664,7 +658,7 @@ onLoad((options) => {
 
         <view v-if="formVisible" class="mt-4 space-y-3">
           <view>
-            <text class="mb-2 block text-sm text-gray-700 font-medium">学号</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">学号</text>
             <input
               v-model="username"
               class="form-input"
@@ -675,7 +669,7 @@ onLoad((options) => {
             <ApiFieldError :messages="getFieldMessages('username')" />
           </view>
           <view>
-            <text class="mb-2 block text-sm text-gray-700 font-medium">密码</text>
+            <text class="mb-2 block text-sm text-fg-2 font-medium">密码</text>
             <input
               v-model="password"
               class="form-input"
@@ -689,21 +683,21 @@ onLoad((options) => {
             <view class="consent-box" :class="{ 'consent-box--checked': consent }">
               <text v-if="consent" class="i-carbon-checkmark text-xs text-white" />
             </view>
-            <text class="flex-1 text-xs text-gray-600 leading-5">
+            <text class="flex-1 text-xs text-fg-2 leading-5">
               我同意智慧书院使用我的门户课表数据，密码仅用于本次登录，不会被保存
             </text>
           </view>
           <view class="flex items-center justify-between">
             <view>
-              <text class="block text-sm text-gray-700">本机记住密码（仅存本手机）</text>
-              <text class="block text-xs text-gray-400">门户会话失效时自动重新登录</text>
+              <text class="block text-sm text-fg-2">本机记住密码（仅存本手机）</text>
+              <text class="block text-xs text-fg-3">门户会话失效时自动重新登录</text>
             </view>
-            <uv-switch v-model="remember" size="22" active-color="#2563eb" />
+            <uv-switch v-model="remember" size="22" :active-color="tokens.primary" />
           </view>
           <ApiFieldError :messages="getFieldMessages('non_field_errors')" />
-          <text v-if="formError" class="block text-sm text-red-500">{{ formError }}</text>
+          <text v-if="formError" class="block text-sm text-error">{{ formError }}</text>
           <button
-            class="w-full rounded-lg bg-blue-500 py-2.5 text-sm text-white font-medium"
+            class="btn-primary btn-block"
             :disabled="busy"
             @click="handleLoginImport"
           >
@@ -711,7 +705,7 @@ onLoad((options) => {
           </button>
           <button
             v-if="binding && binding.bound && showLoginForm"
-            class="w-full border border-gray-200 rounded-lg bg-white py-2.5 text-sm text-gray-700 font-medium"
+            class="btn-outline btn-block"
             :disabled="busy"
             @click="showLoginForm = false"
           >
@@ -719,19 +713,24 @@ onLoad((options) => {
           </button>
         </view>
 
-        <view v-if="importResult" class="mt-3 rounded-lg bg-green-50 p-3 text-xs text-green-700 leading-5">
+        <view v-if="importResult" class="mt-3 rounded-md bg-success-light p-3 text-xs text-success-dark leading-5">
           已导入 {{ importResult.term }}：{{ describeResult(importResult) }}
         </view>
 
-        <view v-if="binding && binding.bound" class="mt-3 text-right">
-          <text class="text-xs text-red-500" @click="handleUnbind">{{ unbinding ? '解除中…' : '解除绑定' }}</text>
-        </view>
+        <button
+          v-if="binding && binding.bound"
+          class="btn-danger mt-3 btn-block"
+          :disabled="unbinding"
+          @click="handleUnbind"
+        >
+          {{ unbinding ? '解除中…' : '解除绑定' }}
+        </button>
       </view>
 
       <!-- 粘贴导入 -->
-      <view class="rounded-2xl bg-white p-4 shadow-sm">
-        <text class="text-base text-gray-900 font-bold">粘贴导入</text>
-        <text class="mt-1 block text-xs text-gray-400 leading-5">
+      <view class="yp-card">
+        <text class="text-base text-fg-1 font-bold">粘贴导入</text>
+        <text class="mt-1 block text-xs text-fg-3 leading-5">
           不想输入密码时可用：在电脑浏览器打开 elective.pku.edu.cn 的「选课结果」页面，全选课表表格并复制；
           或在门户「我的课表」页面全选复制，把文本粘贴到下方后点「解析预览」。
         </text>
@@ -744,7 +743,7 @@ onLoad((options) => {
         <ApiFieldError :messages="getFieldMessages('text')" />
         <view class="mt-3 flex gap-3">
           <button
-            class="flex-1 border border-blue-200 rounded-lg bg-white py-2.5 text-sm text-blue-600 font-medium"
+            class="btn-secondary flex-1"
             :disabled="parsing || !pasteText.trim()"
             @click="handleParse"
           >
@@ -752,32 +751,32 @@ onLoad((options) => {
           </button>
           <button
             v-if="dryRun && dryRun.blocks.length"
-            class="flex-1 rounded-lg bg-blue-500 py-2.5 text-sm text-white font-medium"
+            class="btn-primary flex-1"
             :disabled="pasteImporting"
             @click="handlePasteImport"
           >
             {{ pasteImporting ? '导入中…' : `确认导入（${dryRun.blocks.length}）` }}
           </button>
         </view>
-        <text v-if="pasteError" class="mt-2 block text-sm text-red-500">{{ pasteError }}</text>
-        <view v-if="pasteResult" class="mt-3 rounded-lg bg-green-50 p-3 text-xs text-green-700 leading-5">
+        <text v-if="pasteError" class="mt-2 block text-sm text-error">{{ pasteError }}</text>
+        <view v-if="pasteResult" class="mt-3 rounded-md bg-success-light p-3 text-xs text-success-dark leading-5">
           已导入 {{ pasteResult.term }}：{{ describeResult(pasteResult) }}
         </view>
         <view v-if="dryRun" class="mt-3">
-          <text class="block text-xs text-gray-500">
+          <text class="block text-xs text-fg-2">
             识别格式：{{ FORMAT_LABELS[dryRun.format] }}，共 {{ dryRun.blocks.length }} 条
           </text>
-          <text v-if="!dryRun.blocks.length" class="mt-1 block text-xs text-red-500">
+          <text v-if="!dryRun.blocks.length" class="mt-1 block text-xs text-error">
             未识别到课程，请检查复制的内容是否完整
           </text>
           <view
             v-for="(block, index) in dryRun.blocks"
             :key="index"
-            class="mt-2 rounded-lg bg-gray-50 p-3"
+            class="mt-2 rounded-md bg-fill p-3"
           >
-            <text class="block text-sm text-gray-800 font-medium">{{ block.name }}</text>
-            <text class="mt-0.5 block text-xs text-gray-500">{{ describeSlot(block) }}</text>
-            <text v-if="block.room || block.teacher" class="mt-0.5 block text-xs text-gray-400">
+            <text class="block text-sm text-fg-1 font-medium">{{ block.name }}</text>
+            <text class="mt-0.5 block text-xs text-fg-2">{{ describeSlot(block) }}</text>
+            <text v-if="block.room || block.teacher" class="mt-0.5 block text-xs text-fg-3">
               {{ [block.room, block.teacher].filter(Boolean).join(' · ') }}
             </text>
           </view>
@@ -785,11 +784,11 @@ onLoad((options) => {
       </view>
 
       <!-- 考试安排 -->
-      <view class="flex items-start gap-3 rounded-2xl bg-white p-4 shadow-sm">
-        <text class="i-carbon-task mt-0.5 shrink-0 text-xl text-red-500" />
+      <view class="flex items-start gap-3 yp-card">
+        <text class="i-carbon-task mt-0.5 shrink-0 text-xl text-error" />
         <view class="min-w-0 flex-1">
-          <text class="block text-base text-gray-900 font-bold">考试安排</text>
-          <text class="mt-1 block text-xs text-gray-400 leading-5">
+          <text class="block text-base text-fg-1 font-bold">考试安排</text>
+          <text class="mt-1 block text-xs text-fg-3 leading-5">
             学期考试安排导入后，课表里的课程会按课程号自动匹配出考试（红色显示），无需手动录入；
             第 17 周起的考试周会在周次上标出。临时或未匹配到的考试可在「添加 → 手动添加」里选类别“考试”。
           </text>
@@ -797,40 +796,40 @@ onLoad((options) => {
       </view>
 
       <!-- 手动添加 / 课程库 -->
-      <view class="overflow-hidden rounded-2xl bg-white shadow-sm">
-        <view class="flex items-center justify-between border-b border-gray-50 p-4 active:bg-gray-50" @click="goCatalog">
+      <view class="overflow-hidden rounded-lg bg-card shadow-card">
+        <view class="flex items-center justify-between border-b border-line-light p-4 active:bg-fill" @click="goCatalog">
           <view>
-            <text class="block text-base text-gray-900 font-bold">从课程库添加旁听课程</text>
-            <text class="mt-1 block text-xs text-gray-400">搜索本学期课程，一键把上课时间加进课表</text>
+            <text class="block text-base text-fg-1 font-bold">从课程库添加旁听课程</text>
+            <text class="mt-1 block text-xs text-fg-3">搜索本学期课程，一键把上课时间加进课表</text>
           </view>
-          <view class="flex items-center text-blue-600">
+          <view class="flex items-center text-primary">
             <text class="i-carbon-catalog text-xl" />
           </view>
         </view>
-        <view class="flex items-center justify-between p-4 active:bg-gray-50" @click="goEntryForm">
+        <view class="flex items-center justify-between p-4 active:bg-fill" @click="goEntryForm">
           <view>
-            <text class="block text-base text-gray-900 font-bold">手动添加</text>
-            <text class="mt-1 block text-xs text-gray-400">课程、考试、自习、社团例会等自定义日程</text>
+            <text class="block text-base text-fg-1 font-bold">手动添加</text>
+            <text class="mt-1 block text-xs text-fg-3">课程、考试、自习、社团例会等自定义日程</text>
           </view>
-          <view class="flex items-center text-blue-600">
+          <view class="flex items-center text-primary">
             <text class="i-carbon-add text-xl" />
           </view>
         </view>
       </view>
 
       <!-- 设置 -->
-      <view id="settings" class="rounded-2xl bg-white p-4 shadow-sm">
-        <text class="text-base text-gray-900 font-bold">课表设置</text>
+      <view id="settings" class="yp-card">
+        <text class="text-base text-fg-1 font-bold">课表设置</text>
         <view
           v-if="settings"
-          class="flex items-center justify-between border-b border-gray-50 py-3 active:opacity-70"
+          class="flex items-center justify-between border-b border-line-light py-3 active:opacity-70"
           @click="openFilter"
         >
           <view>
-            <text class="block text-sm text-gray-700">筛选来源与标签</text>
-            <text class="block text-xs text-gray-400">学校课表 / 书院课 / 活动 / 预约 / 考试，以及按标签显示或隐藏</text>
+            <text class="block text-sm text-fg-2">筛选来源与标签</text>
+            <text class="block text-xs text-fg-3">学校课表 / 书院课 / 活动 / 预约 / 考试，以及按标签显示或隐藏</text>
           </view>
-          <view class="flex shrink-0 items-center text-sm text-blue-600">
+          <view class="flex shrink-0 items-center text-sm text-primary">
             <text>{{ filterText }}</text>
             <text class="i-carbon-chevron-right ml-0.5" />
           </view>
@@ -839,34 +838,34 @@ onLoad((options) => {
           <view
             v-for="item in toggles"
             :key="item.key"
-            class="flex items-center justify-between border-b border-gray-50 py-3"
+            class="flex items-center justify-between border-b border-line-light py-3"
           >
             <view>
-              <text class="block text-sm text-gray-700">{{ item.label }}</text>
-              <text class="block text-xs text-gray-400">{{ item.desc }}</text>
+              <text class="block text-sm text-fg-2">{{ item.label }}</text>
+              <text class="block text-xs text-fg-3">{{ item.desc }}</text>
             </view>
             <uv-switch
               :model-value="settings[item.key]"
               :disabled="!!savingKeys[item.key]"
               size="22"
-              active-color="#2563eb"
+              :active-color="tokens.primary"
               @change="(value: boolean) => handleToggle(item.key, value)"
             />
           </view>
         </template>
         <view class="flex items-center justify-between py-3">
           <view>
-            <text class="block text-sm text-gray-700">显示已隐藏的日程</text>
-            <text class="block text-xs text-gray-400">打开后可在课表里取消隐藏</text>
+            <text class="block text-sm text-fg-2">显示已隐藏的日程</text>
+            <text class="block text-xs text-fg-3">打开后可在课表里取消隐藏</text>
           </view>
-          <uv-switch :model-value="showHidden" size="22" active-color="#2563eb" @change="handleShowHiddenChange" />
+          <uv-switch :model-value="showHidden" size="22" :active-color="tokens.primary" @change="handleShowHiddenChange" />
         </view>
 
-        <view v-if="settings" class="mt-2 border-t border-gray-100 pt-3">
+        <view v-if="settings" class="mt-2 border-t border-line-light pt-3">
           <view class="flex items-center justify-between">
             <view class="min-w-0 flex-1 pr-3">
-              <text class="block text-sm text-gray-700">上课提醒</text>
-              <text class="block text-xs text-gray-400 leading-5">
+              <text class="block text-sm text-fg-2">上课提醒</text>
+              <text class="block text-xs text-fg-3 leading-5">
                 上课前通过微信订阅消息提醒。微信每次允许只能发送一条，用完后需再次授权；未授权或用完时改为站内通知（含企业微信推送）。
               </text>
             </view>
@@ -874,53 +873,53 @@ onLoad((options) => {
               :model-value="settings.reminder_enabled"
               :disabled="reminderSaving"
               size="22"
-              active-color="#2563eb"
+              :active-color="tokens.primary"
               @change="handleReminderToggle"
             />
           </view>
           <template v-if="settings.reminder_enabled">
             <view class="mt-3 flex items-center justify-between">
-              <text class="text-sm text-gray-700">提醒时间</text>
+              <text class="text-sm text-fg-2">提醒时间</text>
               <picker
                 :value="reminderMinuteIndex"
                 :range="reminderMinuteLabels"
                 :disabled="reminderSaving"
                 @change="handleReminderMinutesChange"
               >
-                <view class="flex items-center text-sm text-blue-600">
+                <view class="flex items-center text-sm text-primary">
                   <text>提前 {{ settings.reminder_minutes }} 分钟</text>
                   <text class="i-carbon-chevron-down ml-1" />
                 </view>
               </picker>
             </view>
-            <text v-if="reminderHint" class="mt-2 block text-xs text-gray-500 leading-5">{{ reminderHint }}</text>
+            <text v-if="reminderHint" class="mt-2 block text-xs text-fg-2 leading-5">{{ reminderHint }}</text>
             <button
               v-if="reminderTemplateId"
-              class="mt-3 w-full border border-blue-200 rounded-lg bg-white py-2.5 text-sm text-blue-600 font-medium"
+              class="btn-secondary mt-3 btn-block"
               :disabled="reminderSaving"
               @click="handleReminderAuthorize"
             >
               授权微信提醒
             </button>
-            <text v-else class="mt-2 block text-xs text-gray-400">微信订阅消息未配置，提醒将通过站内通知发送</text>
+            <text v-else class="mt-2 block text-xs text-fg-3">微信订阅消息未配置，提醒将通过站内通知发送</text>
           </template>
         </view>
 
-        <view class="mt-2 border-t border-gray-100 pt-3">
-          <text class="block text-sm text-gray-700">日历订阅</text>
-          <text class="mt-1 block text-xs text-gray-400 leading-5">
+        <view class="mt-2 border-t border-line-light pt-3">
+          <text class="block text-sm text-fg-2">日历订阅</text>
+          <text class="mt-1 block text-xs text-fg-3 leading-5">
             把订阅链接添加到系统日历（iOS 日历、Outlook、Google 日历等），课表变动会自动更新。订阅内容跟随「筛选来源与标签」里的设置。链接含私人 token，请勿转发。
           </text>
           <view class="mt-3 flex gap-3">
             <button
-              class="flex-1 border border-blue-200 rounded-lg bg-white py-2.5 text-sm text-blue-600 font-medium"
+              class="btn-secondary flex-1"
               :disabled="icsLoading"
               @click="handleCopyIcs"
             >
               复制订阅链接
             </button>
             <button
-              class="flex-1 border border-gray-200 rounded-lg bg-white py-2.5 text-sm text-gray-600 font-medium"
+              class="btn-outline flex-1"
               :disabled="icsLoading"
               @click="handleRotateIcs"
             >
@@ -942,11 +941,11 @@ onLoad((options) => {
   box-sizing: border-box;
   width: 100%;
   padding: 0 24rpx;
-  font-size: 28rpx;
-  color: #1f2937;
-  background: #f9fafb;
-  border: 2rpx solid #e5e7eb;
-  border-radius: 12rpx;
+  font-size: var(--yp-font-sm);
+  color: var(--yp-text-1);
+  background: var(--yp-bg-fill);
+  border: 2rpx solid var(--yp-border);
+  border-radius: var(--yp-radius-md);
 }
 
 .form-input {
@@ -968,16 +967,12 @@ onLoad((options) => {
   width: 36rpx;
   height: 36rpx;
   margin-top: 4rpx;
-  border: 2rpx solid #cbd5e1;
-  border-radius: 8rpx;
+  border: 2rpx solid var(--yp-border);
+  border-radius: var(--yp-radius-sm);
 
   &--checked {
-    background: #2563eb;
-    border-color: #2563eb;
+    background: var(--yp-color-primary);
+    border-color: var(--yp-color-primary);
   }
-}
-
-button::after {
-  border: none;
 }
 </style>

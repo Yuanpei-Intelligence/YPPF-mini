@@ -20,6 +20,7 @@ import type {
   WeekDay,
   WeekView,
 } from '@/api/types/timetable'
+import { tokens } from '@/style/tokens'
 
 // @unocss-include
 // 上面这行让 UnoCSS 扫描本文件：这里的校历配色表以字符串形式返回 class（.ts 默认不在扫描范围内）。
@@ -292,10 +293,10 @@ interface CalendarLabelStyle {
 
 /** 校历标签配色：放假 / 考试红，调休蓝，仅标注灰 */
 const CALENDAR_LABEL_STYLES: Record<CalendarKind, CalendarLabelStyle> = {
-  holiday: { class: 'text-red-500', color: '#ef4444' },
-  exam: { class: 'text-red-500', color: '#ef4444' },
-  swap: { class: 'text-blue-500', color: '#3b82f6' },
-  info: { class: 'text-gray-400', color: '#9ca3af' },
+  holiday: { class: 'text-error', color: tokens.error },
+  exam: { class: 'text-error', color: tokens.error },
+  swap: { class: 'text-primary', color: tokens.primary },
+  info: { class: 'text-fg-3', color: tokens.text3 },
 }
 
 export function calendarLabelClass(kind: CalendarKind | null | undefined): string {
@@ -306,9 +307,9 @@ export function calendarLabelColor(kind: CalendarKind | null | undefined): strin
   return kind ? CALENDAR_LABEL_STYLES[kind]?.color ?? '' : ''
 }
 
-/** 停课列的底色（gray-100）：页面 class 与 canvas 色值 */
-export const CALENDAR_SHADE_CLASS = 'bg-gray-100'
-export const CALENDAR_SHADE_COLOR = '#f3f4f6'
+/** 停课列的底色（bg-fill 令牌）：页面 class 与 canvas 色值 */
+export const CALENDAR_SHADE_CLASS = 'bg-fill'
+export const CALENDAR_SHADE_COLOR = tokens.bgFill
 
 /** 停课日没有 label 时的兜底文案 */
 const SUSPENDED_LABELS: Record<SuspendedKind, string> = { holiday: '放假', exam: '考试周' }

@@ -5,6 +5,7 @@
     在此我们relaunch到之前所在的tabbar的顶层页面
     这样就清除了页面栈
 */
+import { onLoad } from '@dcloudio/uni-app'
 import { tabbarList, tabbarStore } from '@/tabbar/store'
 
 function goToLastTabbarPage() {
@@ -23,16 +24,16 @@ onLoad(() => {
 </script>
 
 <template>
-  <view class="relative min-h-screen">
+  <view class="relative yp-page">
     <uv-loading-page
       :loading="true"
-      loading-text="正在重定向..."
+      loading-text="正在跳转…"
       loading-mode="circle"
     />
-    <view class="fixed bottom-20 left-0 right-0 text-center" style="z-index: 1000;">
-      <text class="text-sm text-gray-500">如果没有自动跳转，请</text>
-      <text class="text-blue-500 underline" @click="goToLastTabbarPage">点击此处</text>
-      <text class="text-sm text-gray-500">手动跳转</text>
+    <view class="fixed bottom-20 left-0 right-0 z-1000 text-center text-sm text-fg-3">
+      <text>如果没有自动跳转，请</text>
+      <text class="text-primary underline" @click="goToLastTabbarPage">点击此处</text>
+      <text>手动跳转</text>
     </view>
   </view>
 </template>
