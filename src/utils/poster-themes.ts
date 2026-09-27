@@ -363,3 +363,35 @@ export function savePosterTheme(key: PosterThemeKey) {
     console.error('写入海报风格失败:', error)
   }
 }
+
+/** 海报内容：term 整学期（每周时段 + 考试安排），week 某一周的日程 */
+export type PosterMode = 'term' | 'week'
+
+export const DEFAULT_POSTER_MODE: PosterMode = 'term'
+
+/** 本机设置（不分账号），和风格一样只记在这台手机上 */
+const POSTER_MODE_KEY = 'timetable_poster_mode'
+
+export function isPosterMode(value: unknown): value is PosterMode {
+  return value === 'term' || value === 'week'
+}
+
+/** 上次选的海报内容；没有或值不合法时为 null */
+export function readPosterMode(): PosterMode | null {
+  try {
+    const value = uni.getStorageSync(POSTER_MODE_KEY)
+    return isPosterMode(value) ? value : null
+  }
+  catch {
+    return null
+  }
+}
+
+export function savePosterMode(mode: PosterMode) {
+  try {
+    uni.setStorageSync(POSTER_MODE_KEY, mode)
+  }
+  catch (error) {
+    console.error('写入海报内容选择失败:', error)
+  }
+}
